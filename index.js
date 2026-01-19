@@ -10,7 +10,7 @@ const cron = require('node-cron');
 const BOT_TOKEN = process.env.BOT_TOKEN || '8035930401:AAH4bICwB8LVXApFEIaLmOlsYD9PyO5sylI';
 const PORT = process.env.PORT || 3000;
 const WEBHOOK_PATH = `/webhook/${BOT_TOKEN}`;
-const DOMAIN = 'https://marketplacebot.bothost.ru';
+const DOMAIN = process.env.DOMAIN || 'https://marketplacebot.bothost.ru';
 const BOT_USERNAME = 'RegisterMarketPlace_bot';
 const YOOMONEY_WALLET = process.env.YOOMONEY_WALLET || '4100118944797800';
 const YOOMONEY_SECRET = process.env.YOOMONEY_SECRET || 'fL8QIMDHIeudGlqCPNR7eux/';
@@ -21,7 +21,9 @@ app.use(express.urlencoded({ extended: true }));
 
 // Папка для загрузок
 const UPLOADS = path.join(__dirname, 'uploads');
-if (!fs.existsSync(UPLOADS)) fs.mkdirSync(UPLOADS, { recursive: true });
+if (!fs.existsSync(UPLOADS)) {
+    fs.mkdirSync(UPLOADS, { recursive: true });
+}
 
 // Настройка Multer
 const storage = multer.diskStorage({
@@ -49,10 +51,10 @@ function loadDB() {
         if (fs.existsSync(DB_FILE)) {
             const data = fs.readFileSync(DB_FILE, 'utf8');
             db = JSON.parse(data);
-            console.log(`📂 Database loaded: ${db.users.length} users, ${db.products.length} products`);
+            console.log(`Database loaded: ${db.users.length} users, ${db.products.length} products`);
         }
     } catch (e) {
-        console.log('⚠️ Could not load database:', e.message);
+        console.log('Could not load database:', e.message);
     }
 }
 
@@ -61,7 +63,7 @@ function saveDB() {
     try {
         fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
     } catch (e) {
-        console.log('⚠️ Could not save database:', e.message);
+        console.log('Could not save database:', e.message);
     }
 }
 
@@ -98,7 +100,7 @@ async function sendMessage(chatId, text, options = {}) {
             body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', ...options }),
         });
     } catch (e) {
-        console.error('TG error:', e.message);
+        console.error('Telegram error:', e.message);
     }
 }
 
@@ -158,7 +160,7 @@ function createUser(username, telegramId, displayName, passwordHash) {
     });
 
     saveDB();
-    console.log(`👤 New user: ${username}`);
+    console.log(`New user: ${username}`);
     return user;
 }
 
@@ -205,7 +207,7 @@ cron.schedule('0 0 * * *', () => {
     });
 
     saveDB();
-    console.log('⏰ Проверка подписок выполнена');
+    console.log('Проверка подписок выполнена');
 });
 
 // Уведомления о подписке за 3 дня
@@ -272,18 +274,18 @@ app.post('/api/yoomoney/webhook', (req, res) => {
     const { notification_type, operation_id, amount, currency, datetime, sender, codepro, label, sha1_hash, test_notification } = req.body;
 
     if (test_notification === 'true') {
-        console.log('✅ Тестовое уведомление - OK');
+        console.log('Тестовое уведомление - OK');
         return res.send('OK');
     }
 
     if (!label) {
-        console.log('⚠️ Пустой label');
+        console.log('Пустой label');
         return res.send('OK');
     }
 
     const payment = pendingPayments.get(label);
     if (!payment) {
-        console.log('❌ Payment not found:', label);
+        console.log('Payment not found:', label);
         return res.status(404).send('Not found');
     }
 
@@ -326,7 +328,8 @@ app.get('/payment/success', (req, res) => {
     const { id } = req.query;
     const payment = pendingPayments.get(id);
 
-    res.send(`<!DOCTYPE html>
+    res.send(`
+<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
@@ -376,7 +379,8 @@ setInterval(async () => {
 ` : ''}
 </script>
 </body>
-</html>`);
+</html>
+    `);
 });
 
 // Telegram Webhook
@@ -733,7 +737,7 @@ app.post('/api/publish', upload.single('file'), (req, res) => {
     user.myProducts.push(product.id);
     saveDB();
 
-    console.log(`📦 New: ${title} by ${username}`);
+    console.log(`New product: ${title} by ${username}`);
     res.json({ success: true });
 });
 
@@ -783,7 +787,7 @@ app.post('/api/buy', (req, res) => {
     });
 
     saveDB();
-    console.log(`🛒 ${user.username} → ${product.title}`);
+    console.log(`Purchase: ${user.username} → ${product.title}`);
     res.json({ success: true, balance: user.balance });
 });
 
@@ -794,8 +798,13 @@ app.post('/api/favorite', (req, res) => {
     if (!user) return res.status(404).json({ error: 'Not found' });
 
     const idx = db.favorites.findIndex(f => f.userId === user.id && f.productId === productId);
-    if (idx > -1) { db.favorites.splice(idx, 1); res.json({ favorited: false }); }
-    else { db.favorites.push({ userId: user.id, productId }); res.json({ favorited: true }); }
+    if (idx > -1) {
+        db.favorites.splice(idx, 1);
+        res.json({ favorited: false });
+    } else {
+        db.favorites.push({ userId: user.id, productId });
+        res.json({ favorited: true });
+    }
     saveDB();
 });
 
@@ -850,7 +859,8 @@ app.post('/api/profile', (req, res) => {
 });
 
 // HTML-страница
-const HTML = `<!DOCTYPE html>
+const HTML = `
+<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
@@ -1084,96 +1094,159 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
 </nav>
 </div>
 <script>
-let user=null,favIds=[],selAmount=0;
-const $=id=>document.getElementById(id);
-const toast=m=>{const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2500)};
-const fmt=n=>n.toLocaleString('ru')+' ₽';
-const esc=s=>{const d=document.createElement('div');d.textContent=s;return d.innerHTML};
+let user = null;
+let favIds = [];
+let selAmount = 0;
+const $ = id => document.getElementById(id);
+const toast = m => {
+    const t = $('toast');
+    t.textContent = m;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2500);
+};
+const fmt = n => n.toLocaleString('ru') + ' ₽';
+const esc = s => {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+};
 
 // Переключение между вкладками аутентификации
-function switchAuth(m,btn){document.querySelectorAll('.auth-tabs button').forEach(b=>b.classList.remove('active'));btn?.classList.add('active');document.querySelectorAll('.auth-panel').forEach(p=>p.classList.remove('active'));$('auth-'+m).classList.add('active');if(m==='register')showStep1()}
+function switchAuth(m, btn) {
+    document.querySelectorAll('.auth-tabs button').forEach(b => b.classList.remove('active'));
+    btn?.classList.add('active');
+    document.querySelectorAll('.auth-panel').forEach(p => p.classList.remove('active'));
+    $('auth-' + m).classList.add('active');
+    if (m === 'register') showStep1();
+}
 
 // Переключение на регистрацию
-function switchToRegister(){document.querySelectorAll('.auth-tabs button')[1].click()}
+function switchToRegister() {
+    document.querySelectorAll('.auth-tabs button')[1].click();
+}
 
 // Показать шаг 1 регистрации
-function showStep1(){$('reg-step1').classList.remove('hidden');$('reg-step2').classList.add('hidden');$('reg-step3').classList.add('hidden')}
+function showStep1() {
+    $('reg-step1').classList.remove('hidden');
+    $('reg-step2').classList.add('hidden');
+    $('reg-step3').classList.add('hidden');
+}
 
 // Показать шаг 2 регистрации
-function showStep2(){$('reg-step1').classList.add('hidden');$('reg-step2').classList.remove('hidden');$('reg-step3').classList.add('hidden')}
+function showStep2() {
+    $('reg-step1').classList.add('hidden');
+    $('reg-step2').classList.remove('hidden');
+    $('reg-step3').classList.add('hidden');
+}
 
 // Показать шаг 3 регистрации
-function showStep3(){$('reg-step1').classList.add('hidden');$('reg-step2').classList.add('hidden');$('reg-step3').classList.remove('hidden');$('reg-code').focus()}
+function showStep3() {
+    $('reg-step1').classList.add('hidden');
+    $('reg-step2').classList.add('hidden');
+    $('reg-step3').classList.remove('hidden');
+    $('reg-code').focus();
+}
 
 // Начать регистрацию
-async function startReg(){
-    const u=$('reg-username').value.trim(),p=$('reg-password').value,p2=$('reg-password2').value;
-    if(!u||!p||!p2)return toast('Заполните всё');
-    const r=await fetch('/api/auth/register/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p,confirmPassword:p2})});
-    const d=await r.json();
-    if(!r.ok)return toast(d.error);
-    $('reg-show-username').textContent=u;
-    $('reg-bot-link').href=d.botLink;
+async function startReg() {
+    const u = $('reg-username').value.trim();
+    const p = $('reg-password').value;
+    const p2 = $('reg-password2').value;
+    if (!u || !p || !p2) return toast('Заполните всё');
+    const r = await fetch('/api/auth/register/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: u, password: p, confirmPassword: p2 })
+    });
+    const d = await r.json();
+    if (!r.ok) return toast(d.error);
+    $('reg-show-username').textContent = u;
+    $('reg-bot-link').href = d.botLink;
     showStep2();
 }
 
 // Подтвердить регистрацию
-async function confirmReg(){
-    const code=$('reg-code').value.trim().toUpperCase();
-    if(!code||code.length!==6)return toast('6 символов');
-    const r=await fetch('/api/auth/register/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});
-    const d=await r.json();
-    if(!r.ok)return toast(d.error);
-    user=d.user;
-    localStorage.setItem('user',JSON.stringify(user));
+async function confirmReg() {
+    const code = $('reg-code').value.trim().toUpperCase();
+    if (!code || code.length !== 6) return toast('6 символов');
+    const r = await fetch('/api/auth/register/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code })
+    });
+    const d = await r.json();
+    if (!r.ok) return toast(d.error);
+    user = d.user;
+    localStorage.setItem('user', JSON.stringify(user));
     onLogin();
     toast('🎉 Добро пожаловать!');
 }
 
 // Вход по паролю
-async function loginPassword(){
-    const u=$('login-username').value.trim(),p=$('login-password').value;
-    if(!u||!p)return toast('Заполните');
-    const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
-    const d=await r.json();
-    if(!r.ok)return toast(d.error);
-    user=d.user;
-    localStorage.setItem('user',JSON.stringify(user));
+async function loginPassword() {
+    const u = $('login-username').value.trim();
+    const p = $('login-password').value;
+    if (!u || !p) return toast('Заполните');
+    const r = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: u, password: p })
+    });
+    const d = await r.json();
+    if (!r.ok) return toast(d.error);
+    user = d.user;
+    localStorage.setItem('user', JSON.stringify(user));
     onLogin();
 }
 
 // После успешного входа
-function onLogin(){$('auth').classList.add('hidden');$('app').classList.remove('hidden');updateUI();loadMarket();if(location.hash==='#wallet')document.querySelector('[data-tab="wallet"]').click()}
+function onLogin() {
+    $('auth').classList.add('hidden');
+    $('app').classList.remove('hidden');
+    updateUI();
+    loadMarket();
+    if (location.hash === '#wallet') document.querySelector('[data-tab="wallet"]').click();
+}
 
 // Выход
-function logout(){user=null;localStorage.removeItem('user');location.reload()}
+function logout() {
+    user = null;
+    localStorage.removeItem('user');
+    location.reload();
+}
 
 // Обновление UI
-function updateUI(){$('h-avatar').src=user.avatar;$('h-balance').textContent=fmt(user.balance)}
+function updateUI() {
+    $('h-avatar').src = user.avatar;
+    $('h-balance').textContent = fmt(user.balance);
+}
 
 // Загрузка маркетплейса
-async function loadMarket(){
-    const params=new URLSearchParams();
-    if($('f-search').value)params.append('search',$('f-search').value);
-    if($('f-cat').value!=='all')params.append('category',$('f-cat').value);
-    params.append('sort',$('f-sort').value);
-    const[prods,favs]=await Promise.all([fetch('/api/products?'+params).then(r=>r.json()),fetch('/api/favorites/'+user.username).then(r=>r.json())]);
-    favIds=favs.map(f=>f.id);
-    $('grid').innerHTML=prods.length?prods.map(p=>card(p)).join(''):'<div class="empty-state">Пусто</div>';
+async function loadMarket() {
+    const params = new URLSearchParams();
+    if ($('f-search').value) params.append('search', $('f-search').value);
+    if ($('f-cat').value !== 'all') params.append('category', $('f-cat').value);
+    params.append('sort', $('f-sort').value);
+    const [prods, favs] = await Promise.all([
+        fetch('/api/products?' + params).then(r => r.json()),
+        fetch('/api/favorites/' + user.username).then(r => r.json())
+    ]);
+    favIds = favs.map(f => f.id);
+    $('grid').innerHTML = prods.length ? prods.map(p => card(p)).join('') : '<div class="empty-state">Пусто</div>';
 }
 
 // Карточка товара
-function card(p){
-    const fav=favIds.includes(p.id);
+function card(p) {
+    const fav = favIds.includes(p.id);
     return `
         <div class="card" onclick="openProduct('${p.id}')">
             <div class="card-img" style="background-image:url('${p.preview}')">
                 <span class="card-cat">${p.category}</span>
-                <button class="card-fav ${fav?'active':'"}' onclick="event.stopPropagation();toggleFav('${p.id}',this)">♥</button>
+                <button class="card-fav ${fav ? 'active' : ''}" onclick="event.stopPropagation();toggleFav('${p.id}',this)">♥</button>
             </div>
             <div class="card-body">
                 <h3>${esc(p.title)}</h3>
-                <p>${esc(p.description||'')}</p>
+                <p>${esc(p.description || '')}</p>
                 <div class="card-footer">
                     <span class="price">${fmt(p.price)}</span>
                     <button class="btn btn-primary" onclick="event.stopPropagation();buy('${p.id}')">Купить</button>
@@ -1253,63 +1326,141 @@ async function addRating(productId, username, score) {
 }
 
 // Покупка товара
-async function buy(id){if(!confirm('Купить?'))return;const r=await fetch('/api/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.username,productId:id})});const d=await r.json();if(r.ok){user.balance=d.balance;updateUI();toast('✅ Куплено!');loadMarket()}else toast(d.error)}
+async function buy(id) {
+    if (!confirm('Купить?')) return;
+    const r = await fetch('/api/buy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: user.username, productId: id })
+    });
+    const d = await r.json();
+    if (r.ok) {
+        user.balance = d.balance;
+        updateUI();
+        toast('✅ Куплено!');
+        loadMarket();
+    } else {
+        toast(d.error);
+    }
+}
 
 // Добавление/удаление из избранного
-async function toggleFav(id,btn){const r=await fetch('/api/favorite',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.username,productId:id})});const d=await r.json();btn.classList.toggle('active',d.favorited)}
+async function toggleFav(id, btn) {
+    const r = await fetch('/api/favorite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: user.username, productId: id })
+    });
+    const d = await r.json();
+    btn.classList.toggle('active', d.favorited);
+}
 
 // Загрузка избранного
-async function loadFavs(){const f=await fetch('/api/favorites/'+user.username).then(r=>r.json());$('favs-grid').innerHTML=f.length?f.map(p=>card(p)).join(''):'<div class="empty-state">Пусто</div>'}
+async function loadFavs() {
+    const f = await fetch('/api/favorites/' + user.username).then(r => r.json());
+    $('favs-grid').innerHTML = f.length ? f.map(p => card(p)).join('') : '<div class="empty-state">Пусто</div>';
+}
 
 // Загрузка профиля
-async function loadProfile(){
-    const d=await fetch('/api/user/'+user.username).then(r=>r.json());
-    user={...user,...d};localStorage.setItem('user',JSON.stringify(user));updateUI();
-    $('p-avatar').src=d.avatar;$('p-name').textContent=d.displayName;$('p-bio').textContent=d.bio;
-    $('s-products').textContent=d.stats.products;$('s-sales').textContent=d.stats.sales;$('s-earned').textContent=fmt(d.stats.earned);
-    $('e-name').value=d.displayName;$('e-bio').value=d.bio;
-    $('owned').innerHTML=d.ownedProducts.length?d.ownedProducts.map(p=>'<div class="mini-card"><h4>'+esc(p.title)+'</h4><a href="/api/download/'+p.id+'?username='+user.username+'" class="btn btn-primary">📥</a></div>').join(''):'<div class="empty-state">Нет</div>';
+async function loadProfile() {
+    const d = await fetch('/api/user/' + user.username).then(r => r.json());
+    user = { ...user, ...d };
+    localStorage.setItem('user', JSON.stringify(user));
+    updateUI();
+    $('p-avatar').src = d.avatar;
+    $('p-name').textContent = d.displayName;
+    $('p-bio').textContent = d.bio;
+    $('s-products').textContent = d.stats.products;
+    $('s-sales').textContent = d.stats.sales;
+    $('s-earned').textContent = fmt(d.stats.earned);
+    $('e-name').value = d.displayName;
+    $('e-bio').value = d.bio;
+    $('owned').innerHTML = d.ownedProducts.length ? d.ownedProducts.map(p => '<div class="mini-card"><h4>' + esc(p.title) + '</h4><a href="/api/download/' + p.id + '?username=' + user.username + '" class="btn btn-primary">📥</a></div>').join('') : '<div class="empty-state">Нет</div>';
     loadUserChats(user.id);
 }
 
 // Сохранение профиля
-async function saveProfile(){await fetch('/api/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.username,displayName:$('e-name').value,bio:$('e-bio').value})});toast('✅');loadProfile()}
+async function saveProfile() {
+    await fetch('/api/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: user.username, displayName: $('e-name').value, bio: $('e-bio').value })
+    });
+    toast('✅');
+    loadProfile();
+}
 
 // Загрузка кошелька
-async function loadWallet(){
-    const d=await fetch('/api/user/'+user.username).then(r=>r.json());
-    user.balance=d.balance;updateUI();
-    $('w-bal').textContent=fmt(d.balance);
-    $('tx').innerHTML=d.transactions.length?d.transactions.map(t=>'<div class="tx"><div><b>'+t.desc+'</b><br><small>'+new Date(t.date).toLocaleString('ru')+'</small></div><span class="'+(t.amount>0?'tx-plus':'tx-minus')+'">'+(t.amount>0?'+':'')+fmt(t.amount)+'</span></div>').join(''):'<div class="empty-state">Нет</div>';
+async function loadWallet() {
+    const d = await fetch('/api/user/' + user.username).then(r => r.json());
+    user.balance = d.balance;
+    updateUI();
+    $('w-bal').textContent = fmt(d.balance);
+    $('tx').innerHTML = d.transactions.length ? d.transactions.map(t => '<div class="tx"><div><b>' + t.desc + '</b><br><small>' + new Date(t.date).toLocaleString('ru') + '</small></div><span class="' + (t.amount > 0 ? 'tx-plus' : 'tx-minus') + '">' + (t.amount > 0 ? '+' : '') + fmt(t.amount) + '</span></div>').join('') : '<div class="empty-state">Нет</div>';
 }
 
 // Выбор суммы пополнения
-function selAmt(a,btn){selAmount=a;$('custom-amount').value='';document.querySelectorAll('.amount-btn').forEach(b=>b.classList.remove('selected'));btn.classList.add('selected')}
+function selAmt(a, btn) {
+    selAmount = a;
+    $('custom-amount').value = '';
+    document.querySelectorAll('.amount-btn').forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+}
 
 // Пополнение баланса
-$('custom-amount').addEventListener('input',function(){selAmount=Number(this.value)||0;document.querySelectorAll('.amount-btn').forEach(b=>b.classList.remove('selected'))});
+$('custom-amount').addEventListener('input', function() {
+    selAmount = Number(this.value) || 0;
+    document.querySelectorAll('.amount-btn').forEach(b => b.classList.remove('selected'));
+});
 
 // Оплатить
-async function pay(){
-    const a=selAmount||Number($('custom-amount').value);
-    if(!a||a<10)return toast('Мин. 10₽');
-    const r=await fetch('/api/payment/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.username,amount:a})});
-    const d=await r.json();
-    if(!r.ok)return toast(d.error);
-    window.open(d.paymentUrl,'_blank');
+async function pay() {
+    const a = selAmount || Number($('custom-amount').value);
+    if (!a || a < 10) return toast('Мин. 10₽');
+    const r = await fetch('/api/payment/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: user.username, amount: a })
+    });
+    const d = await r.json();
+    if (!r.ok) return toast(d.error);
+    window.open(d.paymentUrl, '_blank');
     toast('Оплата...');
-    const int=setInterval(async()=>{try{const s=await fetch('/api/payment/status/'+d.paymentId).then(r=>r.json());if(s.status==='completed'){clearInterval(int);toast('✅ Оплачено!');loadWallet()}}catch(e){}},4000);
-    setTimeout(()=>clearInterval(int),600000);
+    const int = setInterval(async () => {
+        try {
+            const s = await fetch('/api/payment/status/' + d.paymentId).then(r => r.json());
+            if (s.status === 'completed') {
+                clearInterval(int);
+                toast('✅ Оплачено!');
+                loadWallet();
+            }
+        } catch (e) {}
+    }, 4000);
+    setTimeout(() => clearInterval(int), 600000);
 }
 
 // Публикация товара
-async function publish(){
-    const t=$('u-title').value.trim(),pr=$('u-price').value,de=$('u-desc').value.trim();
-    if(!t||!pr||!de)return toast('Заполните');
-    const fd=new FormData();fd.append('username',user.username);fd.append('title',t);fd.append('price',pr);fd.append('description',de);fd.append('category',$('u-cat').value);
-    const f=$('u-file').files[0];if(f)fd.append('file',f);
-    const r=await fetch('/api/publish',{method:'POST',body:fd});
-    if(r.ok){toast('🚀 Готово!');$('u-title').value='';$('u-price').value='';$('u-desc').value='';document.querySelector('[data-tab="market"]').click()}
+async function publish() {
+    const t = $('u-title').value.trim();
+    const pr = $('u-price').value;
+    const de = $('u-desc').value.trim();
+    if (!t || !pr || !de) return toast('Заполните');
+    const fd = new FormData();
+    fd.append('username', user.username);
+    fd.append('title', t);
+    fd.append('price', pr);
+    fd.append('description', de);
+    fd.append('category', $('u-cat').value);
+    const f = $('u-file').files[0];
+    if (f) fd.append('file', f);
+    const r = await fetch('/api/publish', { method: 'POST', body: fd });
+    if (r.ok) {
+        toast('🚀 Готово!');
+        $('u-title').value = '';
+        $('u-price').value = '';
+        $('u-desc').value = '';
+        document.querySelector('[data-tab="market"]').click();
+    }
 }
 
 // Загрузка чатов пользователя
@@ -1376,33 +1527,55 @@ async function sendMessage(chatId, senderId) {
 }
 
 // Проверка сессии при загрузке
-(async function(){
-    const saved=localStorage.getItem('user');
-    if(saved){
-        try{
-            const u=JSON.parse(saved);
-            const r=await fetch('/api/auth/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u.username})});
-            const d=await r.json();
-            if(d.valid){
-                user=d.user;
-                localStorage.setItem('user',JSON.stringify(user));
+(async function() {
+    const saved = localStorage.getItem('user');
+    if (saved) {
+        try {
+            const u = JSON.parse(saved);
+            const r = await fetch('/api/auth/check', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: u.username })
+            });
+            const d = await r.json();
+            if (d.valid) {
+                user = d.user;
+                localStorage.setItem('user', JSON.stringify(user));
                 onLogin();
-            }else{
+            } else {
                 localStorage.removeItem('user');
                 console.log('Сессия устарела');
             }
-        }catch(e){localStorage.removeItem('user')}
+        } catch (e) {
+            localStorage.removeItem('user');
+        }
     }
 })();
 
 // Переключение вкладок
-document.querySelectorAll('.nav a').forEach(a=>{a.onclick=e=>{e.preventDefault();document.querySelectorAll('.nav a').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));a.classList.add('active');$('tab-'+a.dataset.tab).classList.add('active');if(a.dataset.tab==='market')loadMarket();if(a.dataset.tab==='favs')loadFavs();if(a.dataset.tab==='profile')loadProfile();if(a.dataset.tab==='wallet')loadWallet()}});
+document.querySelectorAll('.nav a').forEach(a => {
+    a.onclick = e => {
+        e.preventDefault();
+        document.querySelectorAll('.nav a').forEach(x => x.classList.remove('active'));
+        document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+        a.classList.add('active');
+        $('tab-' + a.dataset.tab).classList.add('active');
+        if (a.dataset.tab === 'market') loadMarket();
+        if (a.dataset.tab === 'favs') loadFavs();
+        if (a.dataset.tab === 'profile') loadProfile();
+        if (a.dataset.tab === 'wallet') loadWallet();
+    };
+});
 
 // Фильтры
-['f-search','f-cat','f-sort'].forEach(id=>{$(id).addEventListener('input',loadMarket);$(id).addEventListener('change',loadMarket)});
+['f-search', 'f-cat', 'f-sort'].forEach(id => {
+    $(id).addEventListener('input', loadMarket);
+    $(id).addEventListener('change', loadMarket);
+});
 </script>
 </body>
-</html>`;
+</html>
+`;
 
 // Главная страница
 app.get('/', (req, res) => res.send(HTML));
