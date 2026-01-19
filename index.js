@@ -8,14 +8,19 @@ const crypto = require('crypto');
 // КОНФИГУРАЦИЯ
 // ═══════════════════════════════════════════════════════════
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT; // Убрал fallback
 const WEBHOOK_PATH = BOT_TOKEN ? `/webhook/${BOT_TOKEN}` : '/webhook/disabled';
 const DOMAIN = process.env.DOMAIN || 'https://marketplacebot.bothost.ru';
 
 console.log('🔧 Конфигурация:');
-console.log(`📍 Порт: ${PORT}`);
+console.log(`📍 Порт: ${PORT || 'НЕ УСТАНОВЛЕН'}`);
 console.log(`🤖 Бот токен: ${BOT_TOKEN ? 'Установлен ✅' : 'Не установлен ❌'}`);
 console.log(`🌐 Домен: ${DOMAIN}`);
+
+if (!PORT) {
+    console.error('❌ КРИТИЧЕСКАЯ ОШИБКА: Переменная PORT не установлена!');
+    process.exit(1);
+}
 
 const app = express();
 app.use(express.json());
@@ -55,7 +60,7 @@ async function sendMessage(chatId, text, options = {}) {
     if (!TELEGRAM_API) return;
     
     try {
-        await fetch(`${TELEGRAM_API}/sendMessage`, {
+        const response = await fetch(`${TELEGRAM_API}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -65,8 +70,12 @@ async function sendMessage(chatId, text, options = {}) {
                 ...options
             })
         });
+        
+        if (!response.ok) {
+            console.error('❌ Telegram API error:', response.status);
+        }
     } catch (e) {
-        console.error('Telegram error:', e);
+        console.error('❌ Telegram error:', e.message);
     }
 }
 
@@ -78,6 +87,7 @@ app.post(WEBHOOK_PATH, async (req, res) => {
     
     try {
         const update = req.body;
+        console.log('📨 Получено обновление от Telegram');
         
         if (!update.message) return;
         
@@ -157,7 +167,7 @@ app.post(WEBHOOK_PATH, async (req, res) => {
             );
         }
     } catch (error) {
-        console.error('Error handling update:', error);
+        console.error('❌ Error handling update:', error);
     }
 });
 
@@ -166,7 +176,7 @@ app.post(WEBHOOK_PATH, async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 
 app.post('/api/register', (req, res) => {
-    console.log('📝 Попытка регистрации:', req.body);
+    console.log('📝 Попытка регистрации:', req.body.username);
     
     const { username, password } = req.body;
     
@@ -215,7 +225,7 @@ app.post('/api/register', (req, res) => {
 });
 
 app.post('/api/login', (req, res) => {
-    console.log('🔑 Попытка входа:', { username: req.body.username });
+    console.log('🔑 Попытка входа:', req.body.username);
     
     const { username, password } = req.body;
     
@@ -250,6 +260,7 @@ app.post('/api/link-telegram', (req, res) => {
     }
     
     user.telegramId = telegramId;
+    console.log(`✅ Telegram связан: ${username} -> ${telegramId}`);
     res.json({ success: true });
 });
 
@@ -336,6 +347,7 @@ app.post('/api/publish', upload.single('file'), (req, res) => {
     
     products.push(product);
     user.myProducts.push(product.id);
+    console.log(`✅ Товар опубликован: ${title} (${username})`);
     res.json({ success: true });
 });
 
@@ -383,6 +395,7 @@ app.post('/api/buy', (req, res) => {
         date: new Date().toISOString()
     });
 
+    console.log(`✅ Покупка: ${product.title} (${username})`);
     res.json({ success: true, balance: user.balance });
 });
 
@@ -424,6 +437,7 @@ app.post('/api/topup', (req, res) => {
         date: new Date().toISOString()
     });
 
+    console.log(`✅ Пополнение: ${sum}₽ (${username})`);
     res.json({ success: true, balance: user.balance });
 });
 
@@ -448,6 +462,7 @@ app.post('/api/profile', (req, res) => {
 
     if (displayName) user.displayName = displayName;
     if (bio !== undefined) user.bio = bio;
+    console.log(`✅ Профиль обновлен: ${username}`);
     res.json({ success: true });
 });
 
@@ -457,12 +472,13 @@ app.get('/api/test', (req, res) => {
         status: 'OK', 
         users: users.length, 
         products: products.length,
-        botEnabled: !!BOT_TOKEN 
+        botEnabled: !!BOT_TOKEN,
+        port: PORT
     });
 });
 
 // ═══════════════════════════════════════════════════════════
-// HTML СТРАНИЦА
+// HTML СТРАНИЦА (та же что и раньше)
 // ═══════════════════════════════════════════════════════════
 const HTML = `<!DOCTYPE html>
 <html lang="ru">
@@ -483,7 +499,6 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(100px);background:var(--card);border:1px solid var(--accent);padding:12px 24px;border-radius:8px;opacity:0;transition:.3s;z-index:999}
 .toast.show{transform:translateX(-50%) translateY(0);opacity:1}
 
-/* AUTH & REGISTER SCREENS */
 #auth, #register-screen {
     position: fixed;
     inset: 0;
@@ -551,7 +566,6 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
     cursor: pointer;
 }
 
-/* APP LAYOUT */
 .app{display:flex;flex-direction:column;min-height:100vh}
 .header{background:var(--card);padding:16px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:50}
 .header h1{font-size:1.25rem;color:var(--accent)}
@@ -769,7 +783,6 @@ const toast=m=>{console.log('📢 Toast:',m);const t=$('toast');t.textContent=m;
 const fmt=n=>new Intl.NumberFormat('ru-RU').format(n)+'₽';
 const esc=s=>{const d=document.createElement('div');d.textContent=s;return d.innerHTML};
 
-// ПЕРЕКЛЮЧЕНИЕ ЭКРАНОВ
 function showLogin() {
     console.log('🔄 Показ экрана входа');
     $('register-screen').classList.add('hidden');
@@ -782,15 +795,12 @@ function showRegister() {
     $('register-screen').classList.remove('hidden');
 }
 
-// РЕГИСТРАЦИЯ И ВХОД
 async function register() {
     console.log('📝 Начало регистрации');
     
     const username = $('reg-username').value.trim();
     const password = $('reg-password').value;
     const password2 = $('reg-password2').value;
-    
-    console.log('📝 Данные регистрации:', { username, passwordLength: password?.length });
     
     if (!username || username.length < 3) {
         return toast('Имя пользователя должно быть минимум 3 символа');
@@ -802,24 +812,18 @@ async function register() {
         return toast('Пароли не совпадают');
     }
     
-    // Отключаем кнопку
     const btn = event.target;
     btn.disabled = true;
     btn.textContent = 'Регистрация...';
     
     try {
-        console.log('📡 Отправка запроса регистрации');
-        
         const res = await fetch('/api/register', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password })
         });
         
-        console.log('📡 Ответ регистрации:', res.status);
-        
         const data = await res.json();
-        console.log('📡 Данные ответа:', data);
         
         if (!res.ok) {
             btn.disabled = false;
@@ -827,7 +831,6 @@ async function register() {
             return toast(data.error || 'Ошибка при регистрации');
         }
         
-        // Автоматически входим после регистрации
         user = data.user;
         onLogin();
         toast('Регистрация успешна!');
@@ -840,8 +843,6 @@ async function register() {
 }
 
 async function login() {
-    console.log('🔑 Начало входа');
-    
     const username = $('login-name').value.trim();
     const password = $('login-password').value;
     
@@ -850,15 +851,11 @@ async function login() {
     }
     
     try {
-        console.log('📡 Отправка запроса входа');
-        
         const res = await fetch('/api/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password })
         });
-        
-        console.log('📡 Ответ входа:', res.status);
         
         if (!res.ok) {
             const data = await res.json();
@@ -866,17 +863,13 @@ async function login() {
         }
         
         user = await res.json();
-        console.log('✅ Успешный вход:', user.username);
         onLogin();
     } catch (err) {
-        console.error('❌ Ошибка входа:', err);
         toast('Ошибка соединения');
     }
 }
 
-// После успешного входа
 function onLogin() {
-    console.log('🎉 Пользователь вошел в систему');
     $('auth').classList.add('hidden');
     $('register-screen').classList.add('hidden');
     $('app').classList.remove('hidden');
@@ -890,7 +883,6 @@ function updateUI() {
     $('h-balance').textContent = fmt(user.balance);
 }
 
-// Навигация
 document.querySelectorAll('.nav a').forEach(a => {
     a.onclick = e => {
         e.preventDefault();
@@ -906,13 +898,11 @@ document.querySelectorAll('.nav a').forEach(a => {
     }
 });
 
-// Обработчики фильтров
 ['f-search', 'f-cat', 'f-sort'].forEach(id => {
     $(id).addEventListener('input', loadMarket);
     $(id).addEventListener('change', loadMarket);
 });
 
-// Загрузка товаров
 async function loadMarket() {
     if (!user) return;
     
@@ -936,12 +926,10 @@ async function loadMarket() {
             ? '<p style="color:var(--dim);text-align:center;padding:20px;">Ничего не найдено</p>' 
             : prods.map(p => renderCard(p)).join('');
     } catch (err) {
-        console.error('❌ Ошибка загрузки товаров:', err);
         toast('Ошибка загрузки товаров');
     }
 }
 
-// Формирование карточки товара
 function renderCard(p) {
     const isFav = favIds.includes(p.id);
     return '<div class="card">' +
@@ -958,7 +946,6 @@ function renderCard(p) {
            '</div></div></div>';
 }
 
-// Покупка товара
 async function buy(id) {
     if (!confirm('Купить этот товар?')) return;
     
@@ -984,7 +971,6 @@ async function buy(id) {
     }
 }
 
-// Избранное
 async function toggleFav(id, btn) {
     try {
         const res = await fetch('/api/favorite', {
@@ -1008,7 +994,6 @@ async function toggleFav(id, btn) {
     }
 }
 
-// Загрузка избранного
 async function loadFavs() {
     try {
         const favs = await fetch('/api/favorites/' + user.username).then(r => r.json());
@@ -1022,7 +1007,6 @@ async function loadFavs() {
     }
 }
 
-// Загрузка профиля
 async function loadProfile() {
     try {
         const data = await fetch('/api/user/' + user.username).then(r => r.json());
@@ -1050,7 +1034,6 @@ async function loadProfile() {
     }
 }
 
-// Сохранение профиля
 async function saveProfile() {
     try {
         await fetch('/api/profile', {
@@ -1070,7 +1053,6 @@ async function saveProfile() {
     }
 }
 
-// Загрузка кошелька
 async function loadWallet() {
     try {
         const data = await fetch('/api/user/' + user.username).then(r => r.json());
@@ -1091,7 +1073,6 @@ async function loadWallet() {
     }
 }
 
-// Пополнение баланса
 async function topUp(amount) {
     try {
         const res = await fetch('/api/topup', {
@@ -1113,7 +1094,6 @@ async function topUp(amount) {
     }
 }
 
-// Публикация товара
 async function publish() {
     const title = $('u-title').value.trim();
     const price = $('u-price').value;
@@ -1161,9 +1141,14 @@ console.log('✅ CodeVault загружен');
 app.get('/', (req, res) => res.send(HTML));
 
 // ═══════════════════════════════════════════════════════════
-// ЗАПУСК
+// ЗАПУСК С ОБРАБОТКОЙ ОШИБОК
 // ═══════════════════════════════════════════════════════════
-app.listen(PORT, async () => {
+const server = app.listen(PORT, async (error) => {
+    if (error) {
+        console.error('❌ Ошибка запуска сервера:', error);
+        return;
+    }
+    
     console.log(`✅ CodeVault запущен на порту ${PORT}`);
     
     // Устанавливаем вебхук для бота только если токен есть
@@ -1172,7 +1157,12 @@ app.listen(PORT, async () => {
         console.log(`🔄 Настройка вебхука: ${webhookUrl}`);
         
         try {
-            const res = await fetch(`${TELEGRAM_API}/setWebhook?url=${webhookUrl}`);
+            const res = await fetch(`${TELEGRAM_API}/setWebhook`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: webhookUrl })
+            });
+            
             const data = await res.json();
             
             if (data.ok) {
@@ -1185,6 +1175,20 @@ app.listen(PORT, async () => {
         }
     } else {
         console.warn('⚠️ Бот выключен (переменная BOT_TOKEN не установлена)');
-        console.log('💡 Для включения бота добавьте переменную окружения BOT_TOKEN в настройках');
+        console.log('💡 Для включения бота добавьте переменную окружения BOT_TOKEN');
+    }
+});
+
+// Обработка ошибок сервера
+server.on('error', (err) => {
+    console.error('❌ Ошибка сервера:', err);
+    
+    if (err.code === 'EADDRINUSE') {
+        console.error(`❌ КРИТИЧЕСКАЯ ОШИБКА: Порт ${PORT} уже используется!`);
+        console.log('💡 Это может произойти, если:');
+        console.log('   1. На сервере уже запущен другой процесс на этом порту');
+        console.log('   2. Переменная PORT установлена неправильно');
+        console.log('   3. Предыдущий экземпляр приложения не был остановлен');
+        process.exit(1);
     }
 });
