@@ -8,7 +8,7 @@ const crypto = require('crypto');
 // КОНФИГУРАЦИЯ
 // ═══════════════════════════════════════════════════════════
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const PORT = process.env.PORT; // Убрал fallback
+const PORT = process.env.PORT;
 const WEBHOOK_PATH = BOT_TOKEN ? `/webhook/${BOT_TOKEN}` : '/webhook/disabled';
 const DOMAIN = process.env.DOMAIN || 'https://marketplacebot.bothost.ru';
 
@@ -44,14 +44,20 @@ let users = [];
 let products = [];
 let transactions = [];
 let favorites = [];
+let registrationCodes = []; // Новое: коды регистрации
 
 // Хеширование пароля
 function hashPassword(password) {
     return crypto.createHash('sha256').update(password).digest('hex');
 }
 
+// Генерация кода регистрации
+function generateRegCode() {
+    return Math.random().toString(36).substring(2, 8).toUpperCase();
+}
+
 // ═══════════════════════════════════════════════════════════
-// TELEGRAM BOT (только если токен установлен)
+// TELEGRAM BOT
 // ═══════════════════════════════════════════════════════════
 const TELEGRAM_API = BOT_TOKEN ? `https://api.telegram.org/bot${BOT_TOKEN}` : null;
 
@@ -101,7 +107,7 @@ app.post(WEBHOOK_PATH, async (req, res) => {
                 reply_markup: {
                     keyboard: [
                         [{ text: "💰 Баланс" }, { text: "🛒 Открыть сайт" }],
-                        [{ text: "❓ Помощь" }]
+                        [{ text: "📝 Регистрация" }, { text: "❓ Помощь" }]
                     ],
                     resize_keyboard: true
                 }
@@ -111,9 +117,63 @@ app.post(WEBHOOK_PATH, async (req, res) => {
                 `👋 *Добро пожаловать, ${from.first_name}!*\n\n` +
                 `🛒 *CodeVault Marketplace*\n` +
                 `Магазин цифровых товаров и ботов\n\n` +
-                `Используйте кнопки внизу для навигации или посетите наш сайт:\n` +
-                `${DOMAIN}`,
+                `🔹 Для регистрации получите код и зарегистрируйтесь на сайте\n` +
+                `🔹 Используйте кнопки внизу для навигации\n\n` +
+                `🌐 Сайт: ${DOMAIN}`,
                 keyboard
+            );
+        }
+        else if (text === "📝 Регистрация" || text === "/register") {
+            // Проверяем, есть ли уже пользователь с таким Telegram ID
+            const existingUser = users.find(u => u.telegramId === from.id);
+            
+            if (existingUser) {
+                await sendMessage(chatId,
+                    `✅ *У вас уже есть аккаунт!*\n\n` +
+                    `👤 *Пользователь:* ${existingUser.displayName}\n` +
+                    `💰 *Баланс:* ${existingUser.balance} ₽\n\n` +
+                    `Вы можете войти на сайт используя ваши данные.`
+                );
+                return;
+            }
+            
+            // Проверяем, есть ли уже активный код для этого пользователя
+            let existingCode = registrationCodes.find(c => c.telegramId === from.id && c.expiresAt > Date.now());
+            
+            if (!existingCode) {
+                // Создаем новый код
+                const code = generateRegCode();
+                existingCode = {
+                    code: code,
+                    telegramId: from.id,
+                    username: from.username || from.first_name,
+                    createdAt: Date.now(),
+                    expiresAt: Date.now() + (15 * 60 * 1000) // 15 минут
+                };
+                
+                registrationCodes.push(existingCode);
+                console.log(`🔐 Создан код регистрации: ${code} для @${from.username || from.first_name}`);
+            }
+            
+            const expiresIn = Math.ceil((existingCode.expiresAt - Date.now()) / (60 * 1000));
+            
+            await sendMessage(chatId,
+                `🔐 *Код для регистрации*\n\n` +
+                `\`${existingCode.code}\` _(нажмите для копирования)_\n\n` +
+                `📋 *Инструкция:*\n` +
+                `1️⃣ Перейдите на сайт по ссылке ниже\n` +
+                `2️⃣ Нажмите "Зарегистрироваться"\n` +
+                `3️⃣ Введите код в поле "Код Telegram"\n` +
+                `4️⃣ Заполните остальные данные\n\n` +
+                `⏰ *Код действует:* ${expiresIn} мин.\n\n` +
+                `После регистрации ваш Telegram будет автоматически привязан к аккаунту!`,
+                {
+                    reply_markup: {
+                        inline_keyboard: [[
+                            { text: "🌐 Перейти на сайт", url: DOMAIN }
+                        ]]
+                    }
+                }
             );
         }
         else if (text === "💰 Баланс" || text === "/balance") {
@@ -131,7 +191,7 @@ app.post(WEBHOOK_PATH, async (req, res) => {
                 await sendMessage(chatId,
                     `❌ *Аккаунт не найден*\n\n` +
                     `Похоже, вы еще не зарегистрированы на нашем сайте.\n` +
-                    `Пожалуйста, зарегистрируйтесь по ссылке:\n${DOMAIN}`
+                    `Используйте кнопку "📝 Регистрация" для получения кода.`
                 );
             }
         }
@@ -152,18 +212,28 @@ app.post(WEBHOOK_PATH, async (req, res) => {
             await sendMessage(chatId,
                 `📚 *Помощь и информация*\n\n` +
                 `*Команды:*\n` +
+                `• 📝 Регистрация — получить код для регистрации\n` +
                 `• 💰 Баланс — проверка средств\n` +
                 `• 🛒 Открыть сайт — перейти в магазин\n` +
                 `• ❓ Помощь — эта информация\n\n` +
                 `*О магазине:*\n` +
                 `CodeVault — магазин цифровых товаров, где вы можете покупать и продавать боты, скрипты, сайты и другие цифровые продукты.\n\n` +
+                `*Как начать:*\n` +
+                `1. Получите код регистрации в боте\n` +
+                `2. Зарегистрируйтесь на сайте с кодом\n` +
+                `3. Начните покупать или продавать товары!\n\n` +
                 `Если у вас есть вопросы, обратитесь к администрации.`
             );
         }
         else {
             await sendMessage(chatId,
-                `🤔 Извините, я не понимаю эту команду.\n` +
-                `Пожалуйста, воспользуйтесь кнопками меню или отправьте /help для справки.`
+                `🤔 Извините, я не понимаю эту команду.\n\n` +
+                `Доступные команды:\n` +
+                `• 📝 Регистрация — получить код\n` +
+                `• 💰 Баланс — проверить счёт\n` +
+                `• 🛒 Открыть сайт — перейти в магазин\n` +
+                `• ❓ Помощь — подробная информация\n\n` +
+                `Или воспользуйтесь кнопками меню.`
             );
         }
     } catch (error) {
@@ -178,7 +248,7 @@ app.post(WEBHOOK_PATH, async (req, res) => {
 app.post('/api/register', (req, res) => {
     console.log('📝 Попытка регистрации:', req.body.username);
     
-    const { username, password } = req.body;
+    const { username, password, telegramCode } = req.body;
     
     if (!username || !password || username.length < 3 || password.length < 6) {
         console.log('❌ Неверные данные регистрации');
@@ -192,12 +262,33 @@ app.post('/api/register', (req, res) => {
         return res.status(400).json({ error: 'Пользователь с таким именем уже существует' });
     }
     
+    let telegramId = null;
+    
+    // Проверяем код Telegram, если он указан
+    if (telegramCode) {
+        const codeData = registrationCodes.find(c => 
+            c.code === telegramCode.toUpperCase() && 
+            c.expiresAt > Date.now()
+        );
+        
+        if (!codeData) {
+            console.log('❌ Неверный или истекший код Telegram');
+            return res.status(400).json({ error: 'Неверный или истекший код Telegram' });
+        }
+        
+        telegramId = codeData.telegramId;
+        
+        // Удаляем использованный код
+        registrationCodes = registrationCodes.filter(c => c.code !== telegramCode.toUpperCase());
+        console.log(`✅ Код Telegram использован: ${telegramCode}`);
+    }
+    
     const user = {
         id: Date.now().toString(),
         username: username,
         displayName: username,
         password: hashPassword(password),
-        telegramId: null,
+        telegramId: telegramId,
         bio: 'Новый участник',
         avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`,
         balance: 5000,
@@ -219,6 +310,17 @@ app.post('/api/register', (req, res) => {
     });
     
     console.log('✅ Пользователь зарегистрирован:', username);
+    
+    // Отправляем уведомление в Telegram, если аккаунт привязан
+    if (telegramId) {
+        sendMessage(telegramId,
+            `🎉 *Регистрация успешна!*\n\n` +
+            `👤 *Аккаунт:* ${username}\n` +
+            `💰 *Стартовый баланс:* 5000 ₽\n\n` +
+            `Ваш Telegram аккаунт успешно привязан к профилю!\n` +
+            `Теперь вы будете получать уведомления о продажах.`
+        );
+    }
     
     const { password: _, ...userData } = user;
     res.json({ success: true, user: userData });
@@ -264,8 +366,34 @@ app.post('/api/link-telegram', (req, res) => {
     res.json({ success: true });
 });
 
+// Новый API: проверка кода регистрации
+app.post('/api/check-telegram-code', (req, res) => {
+    const { code } = req.body;
+    
+    if (!code) {
+        return res.status(400).json({ error: 'Код не указан' });
+    }
+    
+    const codeData = registrationCodes.find(c => 
+        c.code === code.toUpperCase() && 
+        c.expiresAt > Date.now()
+    );
+    
+    if (!codeData) {
+        return res.status(404).json({ error: 'Код не найден или истёк' });
+    }
+    
+    const expiresIn = Math.ceil((codeData.expiresAt - Date.now()) / (60 * 1000));
+    
+    res.json({ 
+        valid: true, 
+        username: codeData.username,
+        expiresIn: expiresIn 
+    });
+});
+
 // ═══════════════════════════════════════════════════════════
-// API: ПОЛЬЗОВАТЕЛИ И ДАННЫЕ
+// ОСТАЛЬНЫЕ API (без изменений)
 // ═══════════════════════════════════════════════════════════
 
 app.get('/api/user/:username', (req, res) => {
@@ -466,19 +594,19 @@ app.post('/api/profile', (req, res) => {
     res.json({ success: true });
 });
 
-// Тестовый маршрут для отладки
 app.get('/api/test', (req, res) => {
     res.json({ 
         status: 'OK', 
         users: users.length, 
         products: products.length,
         botEnabled: !!BOT_TOKEN,
-        port: PORT
+        port: PORT,
+        activeCodes: registrationCodes.filter(c => c.expiresAt > Date.now()).length
     });
 });
 
 // ═══════════════════════════════════════════════════════════
-// HTML СТРАНИЦА (та же что и раньше)
+// HTML СТРАНИЦА (с исправленной формой регистрации)
 // ═══════════════════════════════════════════════════════════
 const HTML = `<!DOCTYPE html>
 <html lang="ru">
@@ -564,6 +692,24 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
     margin-top: 16px;
     display: inline-block;
     cursor: pointer;
+}
+
+.telegram-section {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 16px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    text-align: left;
+}
+.telegram-section h4 {
+    color: var(--accent);
+    margin-bottom: 8px;
+}
+.telegram-section p {
+    color: var(--dim);
+    font-size: 13px;
+    margin-bottom: 12px;
 }
 
 .app{display:flex;flex-direction:column;min-height:100vh}
@@ -665,6 +811,16 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
         <h1>Регистрация</h1>
         <p>Создание нового аккаунта</p>
         
+        <div class="telegram-section">
+            <h4>🤖 Интеграция с Telegram</h4>
+            <p>Получите код в нашем боте для автоматической привязки аккаунта</p>
+            <div class="input-group">
+                <label class="input-label">Код Telegram (необязательно)</label>
+                <input type="text" id="telegram-code" placeholder="Введите код из бота" style="text-transform: uppercase;">
+                <span class="input-hint">Напишите /register в боте @CodeVaultBot для получения кода</span>
+            </div>
+        </div>
+        
         <div class="input-group">
             <label class="input-label">Имя пользователя</label>
             <input type="text" id="reg-username" placeholder="Введите логин">
@@ -682,7 +838,7 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
             <input type="password" id="reg-password2" placeholder="Повторите пароль">
         </div>
         
-        <button class="btn btn-main" onclick="register()">Зарегистрироваться</button>
+        <button class="btn btn-main" id="register-btn">Зарегистрироваться</button>
         <p style="margin-top:20px">Уже есть аккаунт? <a href="#" class="btn-link" onclick="showLogin()">Войти</a></p>
     </div>
 </div>
@@ -795,12 +951,21 @@ function showRegister() {
     $('register-screen').classList.remove('hidden');
 }
 
+// Исправленная функция регистрации
+document.addEventListener('DOMContentLoaded', function() {
+    const registerBtn = $('register-btn');
+    if (registerBtn) {
+        registerBtn.addEventListener('click', register);
+    }
+});
+
 async function register() {
     console.log('📝 Начало регистрации');
     
     const username = $('reg-username').value.trim();
     const password = $('reg-password').value;
     const password2 = $('reg-password2').value;
+    const telegramCode = $('telegram-code').value.trim();
     
     if (!username || username.length < 3) {
         return toast('Имя пользователя должно быть минимум 3 символа');
@@ -812,15 +977,20 @@ async function register() {
         return toast('Пароли не совпадают');
     }
     
-    const btn = event.target;
+    const btn = $('register-btn');
     btn.disabled = true;
     btn.textContent = 'Регистрация...';
     
     try {
+        const payload = { username, password };
+        if (telegramCode) {
+            payload.telegramCode = telegramCode;
+        }
+        
         const res = await fetch('/api/register', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password })
+            body: JSON.stringify(payload)
         });
         
         const data = await res.json();
@@ -833,7 +1003,11 @@ async function register() {
         
         user = data.user;
         onLogin();
-        toast('Регистрация успешна!');
+        if (telegramCode) {
+            toast('Регистрация успешна! Telegram привязан!');
+        } else {
+            toast('Регистрация успешна!');
+        }
     } catch (err) {
         console.error('❌ Ошибка регистрации:', err);
         btn.disabled = false;
@@ -882,6 +1056,32 @@ function updateUI() {
     $('h-avatar').src = user.avatar;
     $('h-balance').textContent = fmt(user.balance);
 }
+
+// Проверка кода в реальном времени
+$('telegram-code').addEventListener('input', async function() {
+    const code = this.value.trim();
+    if (code.length >= 6) {
+        try {
+            const res = await fetch('/api/check-telegram-code', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code })
+            });
+            
+            if (res.ok) {
+                const data = await res.json();
+                this.style.borderColor = 'var(--green)';
+                toast(\`Код подтвержден! (\${data.expiresIn} мин. до истечения)\`);
+            } else {
+                this.style.borderColor = 'var(--red)';
+            }
+        } catch (err) {
+            console.log('Ошибка проверки кода:', err);
+        }
+    } else {
+        this.style.borderColor = 'var(--border)';
+    }
+});
 
 document.querySelectorAll('.nav a').forEach(a => {
     a.onclick = e => {
@@ -1140,6 +1340,16 @@ console.log('✅ CodeVault загружен');
 
 app.get('/', (req, res) => res.send(HTML));
 
+// Очистка устаревших кодов каждые 5 минут
+setInterval(() => {
+    const before = registrationCodes.length;
+    registrationCodes = registrationCodes.filter(c => c.expiresAt > Date.now());
+    const after = registrationCodes.length;
+    if (before !== after) {
+        console.log(`🧹 Очищено ${before - after} устаревших кодов регистрации`);
+    }
+}, 5 * 60 * 1000);
+
 // ═══════════════════════════════════════════════════════════
 // ЗАПУСК С ОБРАБОТКОЙ ОШИБОК
 // ═══════════════════════════════════════════════════════════
@@ -1151,7 +1361,6 @@ const server = app.listen(PORT, async (error) => {
     
     console.log(`✅ CodeVault запущен на порту ${PORT}`);
     
-    // Устанавливаем вебхук для бота только если токен есть
     if (BOT_TOKEN) {
         const webhookUrl = `${DOMAIN}${WEBHOOK_PATH}`;
         console.log(`🔄 Настройка вебхука: ${webhookUrl}`);
@@ -1175,20 +1384,13 @@ const server = app.listen(PORT, async (error) => {
         }
     } else {
         console.warn('⚠️ Бот выключен (переменная BOT_TOKEN не установлена)');
-        console.log('💡 Для включения бота добавьте переменную окружения BOT_TOKEN');
     }
 });
 
-// Обработка ошибок сервера
 server.on('error', (err) => {
     console.error('❌ Ошибка сервера:', err);
-    
     if (err.code === 'EADDRINUSE') {
         console.error(`❌ КРИТИЧЕСКАЯ ОШИБКА: Порт ${PORT} уже используется!`);
-        console.log('💡 Это может произойти, если:');
-        console.log('   1. На сервере уже запущен другой процесс на этом порту');
-        console.log('   2. Переменная PORT установлена неправильно');
-        console.log('   3. Предыдущий экземпляр приложения не был остановлен');
         process.exit(1);
     }
 });
