@@ -43,7 +43,7 @@ function hashPassword(password) {
 // ═══════════════════════════════════════════════════════════
 // TELEGRAM BOT
 // ═══════════════════════════════════════════════════════════
-const TELEGRAM_API = `https://api.telegram.org/bot${8035930401:AAH4bICwB8LVXApFEIaLmOlsYD9PyO5sylI}`;
+const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 // Простая функция отправки сообщения
 async function sendMessage(chatId, text, options = {}) {
