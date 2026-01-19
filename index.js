@@ -650,7 +650,7 @@ app.post('/api/favorite', (req, res) => {
     const user = db.users.find(u => u.username === username);
     if (!user) return res.status(404).json({ error: 'Not found' });
 
-    const idx = db.favorites.findIndex(f => f visibleerId === user.id && f.productId === productId);
+    const idx = db.favorites.findIndex(f => f.oderId === user.id && f.productId === productId);
     if (idx > -1) { db.favorites.splice(idx, 1); res.json({ favorited: false }); }
     else { db.favorites.push({ oderId: user.id, productId }); res.json({ favorited: true }); }
     saveDB();
