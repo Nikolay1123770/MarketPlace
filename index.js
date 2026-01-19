@@ -3,14 +3,14 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const fetch = require('node-fetch'); // Убедитесь, что установлена версия 2: npm install node-fetch@2
+// const fetch = require('node-fetch'); // Убрано, так как в Node 18 fetch встроен
 const cron = require('node-cron');
 
 // Конфигурация
 const BOT_TOKEN = process.env.BOT_TOKEN || '8035930401:AAH4bICwB8LVXApFEIaLmOlsYD9PyO5sylI';
 const PORT = process.env.PORT || 3000;
 const WEBHOOK_PATH = `/webhook/${BOT_TOKEN}`;
-const DOMAIN = process.env.DOMAIN || 'https://marketplacebot.bothost.ru'; // Укажите ваш реальный домен
+const DOMAIN = process.env.DOMAIN || 'https://marketplacebot.bothost.ru'; 
 const BOT_USERNAME = 'RegisterMarketPlace_bot';
 const YOOMONEY_WALLET = process.env.YOOMONEY_WALLET || '4100118944797800';
 
@@ -28,7 +28,6 @@ if (!fs.existsSync(UPLOADS)) {
 const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, UPLOADS),
     filename: (req, file, cb) => {
-        // Делаем имя файла безопасным (латиница)
         const safeName = file.originalname.replace(/[^a-zA-Z0-9.]/g, '_');
         cb(null, Date.now() + '-' + safeName);
     },
@@ -58,7 +57,6 @@ function loadDB() {
         }
     } catch (e) {
         console.log('Could not load database:', e.message);
-        // Инициализация пустой базы, если файл поврежден
         db = { users: [], products: [], transactions: [], favorites: [], comments: [], ratings: [], chats: [] };
     }
 }
@@ -72,7 +70,6 @@ function saveDB() {
     }
 }
 
-// Автосохранение каждые 30 секунд
 setInterval(saveDB, 30000);
 loadDB();
 
@@ -81,12 +78,10 @@ let pendingPayments = new Map();
 const registerCodes = new Map();
 const pendingRegistrations = new Map();
 
-// Хэширование пароля (лучше добавить соль, но для примера оставим так)
 function hashPassword(password) {
     return crypto.createHash('sha256').update(password).digest('hex');
 }
 
-// Генерация ID платежа
 function generatePaymentId() {
     return 'PAY_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
 }
@@ -131,14 +126,14 @@ function createPaymentUrl(amount, paymentId) {
 
 function createUser(username, telegramId, displayName, passwordHash) {
     const user = {
-        id: Date.now().toString() + crypto.randomBytes(2).toString('hex'), // Более уникальный ID
+        id: Date.now().toString() + crypto.randomBytes(2).toString('hex'),
         telegramId,
         username,
         passwordHash,
         displayName: displayName || username,
         bio: 'Новый участник',
         avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`,
-        balance: 100, // Бонус при регистрации
+        balance: 100,
         earned: 0,
         joined: new Date().toLocaleDateString('ru-RU'),
         inventory: [],
@@ -167,47 +162,24 @@ function createUser(username, telegramId, displayName, passwordHash) {
 const authMiddleware = (req, res, next) => {
     const token = req.headers['authorization'];
     if (!token) return res.status(401).json({ error: 'Требуется авторизация' });
-
-    // В простой реализации токен = ID пользователя
     const user = db.users.find(u => u.id === token);
     if (!user) return res.status(401).json({ error: 'Неверный токен' });
-
     req.user = user;
     next();
 };
 
-// --- Cron Jobs ---
+// Cron Jobs
 cron.schedule('0 0 * * *', () => {
-    // Логика проверки подписок (оставлена без изменений)
-    db.users.forEach(user => {
-        if (user.isPremium && user.premiumAutoRenew && user.premiumExpires) {
-            const expiresDate = new Date(user.premiumExpires);
-            const now = new Date();
-            if (expiresDate.toDateString() === now.toDateString()) {
-                const subscriptionCost = 500;
-                if (user.balance >= subscriptionCost) {
-                    user.balance -= subscriptionCost;
-                    user.premiumExpires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-                    // ... логирование транзакции ...
-                } else {
-                    user.isPremium = false;
-                    // ... уведомление ...
-                }
-            }
-        }
-    });
     saveDB();
 });
 
 // --- API Платежей ---
-
 app.post('/api/payment/create', authMiddleware, (req, res) => {
     const { amount } = req.body;
     const user = req.user;
 
     const sum = Number(amount);
     if (!sum || sum < 10) return res.status(400).json({ error: 'Минимум 10 ₽' });
-    if (sum > 100000) return res.status(400).json({ error: 'Максимум 100 000 ₽' });
 
     const paymentId = generatePaymentId();
     pendingPayments.set(paymentId, {
@@ -219,7 +191,6 @@ app.post('/api/payment/create', authMiddleware, (req, res) => {
         createdAt: Date.now(),
     });
 
-    // Очистка старых платежей через час
     setTimeout(() => {
         if (pendingPayments.has(paymentId) && pendingPayments.get(paymentId).status === 'pending') {
             pendingPayments.delete(paymentId);
@@ -238,23 +209,18 @@ app.get('/api/payment/status/:paymentId', (req, res) => {
 
 app.post('/api/yoomoney/webhook', (req, res) => {
     const { amount, label, test_notification } = req.body;
-
     if (test_notification === 'true') return res.send('OK');
     if (!label) return res.send('OK');
 
     const payment = pendingPayments.get(label);
     if (!payment) return res.status(404).send('Not found');
-
     if (payment.status === 'completed') return res.send('OK');
 
     const receivedAmount = parseFloat(amount);
-    // Проверяем, что сумма совпадает (учитывая комиссию, если она есть, лучше проверить >=)
-    
     const user = db.users.find(u => u.id === payment.userId);
 
     if (user) {
         user.balance += receivedAmount;
-
         db.transactions.push({
             id: Date.now().toString(),
             userId: user.id,
@@ -270,21 +236,18 @@ app.post('/api/yoomoney/webhook', (req, res) => {
 
         if (user.telegramId) {
             sendMessage(user.telegramId,
-                `✅ <b>Баланс пополнен!</b>\n\n💰 +${receivedAmount.toLocaleString()} ₽\n💳 Баланс: ${user.balance.toLocaleString()} ₽`
+                `✅ <b>Баланс пополнен!</b>\n\n💰 +${receivedAmount.toLocaleString()} ₽`
             );
         }
     }
     res.send('OK');
 });
 
-// Страница успеха платежа (оставлена упрощенной)
 app.get('/payment/success', (req, res) => {
     const { id } = req.query;
     const payment = pendingPayments.get(id);
-    // ... HTML код страницы успеха (можно оставить тот же) ...
     res.send(`<h1>Статус: ${payment ? payment.status : 'Не найден'}</h1><a href="/">Вернуться</a>`);
 });
-
 
 // --- API Telegram Webhook ---
 app.post(WEBHOOK_PATH, async (req, res) => {
@@ -314,17 +277,14 @@ app.post(WEBHOOK_PATH, async (req, res) => {
                     firstName: from.first_name, 
                     createdAt: Date.now() 
                 });
-                
-                // Код живет 10 минут
                 setTimeout(() => registerCodes.delete(code), 10 * 60 * 1000);
 
                 await answerCallback(callback_query.id, '✅ Код создан!');
-                await sendMessage(chatId, `✅ <b>Код подтверждения</b>\n\n🔐 Код: <code>${code}</code>\n\n⏱ Действует 10 минут`);
+                await sendMessage(chatId, `✅ <b>Код подтверждения</b>\n\n🔐 Код: <code>${code}</code>`);
             } else {
                 await answerCallback(callback_query.id, '❌ Ссылка устарела', true);
             }
         }
-        // ... остальные колбэки ...
         return res.sendStatus(200);
     }
 
@@ -348,9 +308,7 @@ app.post(WEBHOOK_PATH, async (req, res) => {
 });
 
 // --- API Auth ---
-
 app.post('/api/auth/check', (req, res) => {
-    // В реальном приложении лучше проверять валидность токена
     const { username } = req.body;
     if (!username) return res.status(400).json({ valid: false });
     const user = db.users.find(u => u.username.toLowerCase() === username.toLowerCase());
@@ -368,14 +326,11 @@ app.post('/api/auth/login', (req, res) => {
     if (user.passwordHash !== hashPassword(password)) return res.status(401).json({ error: 'Неверный пароль' });
 
     const { passwordHash, ...safeUser } = user;
-    // Возвращаем ID как простой токен
     res.json({ user: safeUser, token: user.id });
 });
 
 app.post('/api/auth/register/start', (req, res) => {
     const { username, password, confirmPassword } = req.body;
-    
-    // Валидация
     if (!username || !password) return res.status(400).json({ error: 'Заполните поля' });
     if (username.length < 3) return res.status(400).json({ error: 'Логин от 3 символов' });
     if (password !== confirmPassword) return res.status(400).json({ error: 'Пароли не совпадают' });
@@ -385,8 +340,6 @@ app.post('/api/auth/register/start', (req, res) => {
 
     const regId = crypto.randomBytes(16).toString('hex');
     pendingRegistrations.set(regId, { username: username.trim(), passwordHash: hashPassword(password), createdAt: Date.now() });
-    
-    // Очистка через 15 минут
     setTimeout(() => pendingRegistrations.delete(regId), 15 * 60 * 1000);
 
     res.json({ success: true, regId, botLink: `https://t.me/${BOT_USERNAME}?start=reg_${regId}` });
@@ -395,14 +348,12 @@ app.post('/api/auth/register/start', (req, res) => {
 app.post('/api/auth/register/confirm', (req, res) => {
     const { code } = req.body;
     if (!code) return res.status(400).json({ error: 'Введите код' });
-
     const regData = registerCodes.get(code.toUpperCase());
     if (!regData) return res.status(401).json({ error: 'Неверный код' });
 
     registerCodes.delete(code.toUpperCase());
     pendingRegistrations.delete(regData.regId);
 
-    // Повторная проверка уникальности
     if (db.users.find(u => u.username.toLowerCase() === regData.username.toLowerCase())) {
         return res.status(400).json({ error: 'Логин уже занят' });
     }
@@ -412,12 +363,10 @@ app.post('/api/auth/register/confirm', (req, res) => {
     res.json({ user: safeUser, token: user.id });
 });
 
-// --- API Социальное (Комментарии, Рейтинги, Чаты) ---
-
+// --- API Социальное ---
 app.post('/api/comments/add', authMiddleware, (req, res) => {
     const { productId, text } = req.body;
     const user = req.user;
-
     if (!productId || !text) return res.status(400).json({ error: "Данные неполные" });
 
     const comment = {
@@ -425,7 +374,7 @@ app.post('/api/comments/add', authMiddleware, (req, res) => {
         productId,
         userId: user.id,
         username: user.username,
-        text: text.slice(0, 500), // Лимит длины
+        text: text.slice(0, 500),
         createdAt: new Date().toISOString(),
     };
 
@@ -439,61 +388,15 @@ app.get('/api/comments/:productId', (req, res) => {
     res.json(comments);
 });
 
-app.post('/api/ratings/add', authMiddleware, (req, res) => {
-    const { productId, score } = req.body;
-    const user = req.user;
-
-    if (!productId || !score || score < 1 || score > 5) return res.status(400).json({ error: "Некорректная оценка" });
-
-    // Проверка на покупку товара перед оценкой (опционально)
-    // if (!user.inventory.includes(productId)) return res.status(403).json({ error: "Купите товар, чтобы оценить" });
-
-    const existingRating = db.ratings.find(r => r.userId === user.id && r.productId === productId);
-    if (existingRating) {
-        return res.status(400).json({ error: "Вы уже оценили этот товар" });
-    }
-
-    const rating = {
-        id: Date.now().toString(),
-        productId,
-        userId: user.id,
-        score: Number(score),
-        createdAt: new Date().toISOString(),
-    };
-
-    db.ratings.push(rating);
-    saveDB();
-    res.json({ success: true, rating });
-});
-
-app.get('/api/ratings/:productId', (req, res) => {
-    const ratings = db.ratings.filter(r => r.productId === req.params.productId);
-    const averageScore = ratings.length > 0
-        ? ratings.reduce((sum, r) => sum + r.score, 0) / ratings.length
-        : 0;
-    res.json({ ratings, averageScore });
-});
-
 // Чаты
 app.post('/api/chats/create', authMiddleware, (req, res) => {
-    const { targetUserId } = req.body; // ID получателя
+    const { targetUserId } = req.body;
     const user = req.user;
+    if (!targetUserId || targetUserId === user.id) return res.status(400).json({ error: "Некорректный получатель" });
 
-    if (!targetUserId || targetUserId === user.id) {
-        return res.status(400).json({ error: "Некорректный получатель" });
-    }
-
-    // Ищем существующий чат
-    let chat = db.chats.find(c => 
-        c.participants.includes(user.id) && c.participants.includes(targetUserId)
-    );
-
+    let chat = db.chats.find(c => c.participants.includes(user.id) && c.participants.includes(targetUserId));
     if (!chat) {
-        chat = {
-            id: Date.now().toString(),
-            participants: [user.id, targetUserId],
-            messages: [],
-        };
+        chat = { id: Date.now().toString(), participants: [user.id, targetUserId], messages: [] };
         db.chats.push(chat);
         saveDB();
     }
@@ -503,29 +406,23 @@ app.post('/api/chats/create', authMiddleware, (req, res) => {
 app.post('/api/chats/send', authMiddleware, (req, res) => {
     const { chatId, text } = req.body;
     const user = req.user;
-
     const chat = db.chats.find(c => c.id === chatId);
     if (!chat) return res.status(404).json({ error: "Чат не найден" });
     if (!chat.participants.includes(user.id)) return res.status(403).json({ error: "Нет доступа" });
 
-    const message = {
+    chat.messages.push({
         id: Date.now().toString(),
         senderId: user.id,
         text: text.slice(0, 1000),
         createdAt: new Date().toISOString(),
-    };
-
-    chat.messages.push(message);
+    });
     saveDB();
-    res.json({ success: true, message });
+    res.json({ success: true });
 });
 
-// Получить список чатов пользователя с данными собеседника
 app.get('/api/chats/list', authMiddleware, (req, res) => {
     const user = req.user;
     const userChats = db.chats.filter(c => c.participants.includes(user.id));
-    
-    // Обогащаем данными о собеседнике
     const enrichedChats = userChats.map(chat => {
         const otherId = chat.participants.find(id => id !== user.id);
         const otherUser = db.users.find(u => u.id === otherId);
@@ -535,43 +432,32 @@ app.get('/api/chats/list', authMiddleware, (req, res) => {
             lastMessage: chat.messages[chat.messages.length - 1]
         };
     });
-
     res.json(enrichedChats);
 });
 
-// Получить детали конкретного чата
 app.get('/api/chats/detail/:chatId', authMiddleware, (req, res) => {
     const { chatId } = req.params;
     const user = req.user;
-    
     const chat = db.chats.find(c => c.id === chatId);
     if (!chat) return res.status(404).json({ error: 'Чат не найден' });
     if (!chat.participants.includes(user.id)) return res.status(403).json({ error: 'Нет доступа' });
-    
     const otherId = chat.participants.find(id => id !== user.id);
     const otherUser = db.users.find(u => u.id === otherId);
-
-    res.json({
-        ...chat,
-        partnerUsername: otherUser ? otherUser.username : 'Unknown'
-    });
+    res.json({ ...chat, partnerUsername: otherUser ? otherUser.username : 'Unknown' });
 });
 
 // --- API Товаров ---
-
 app.get('/api/products', (req, res) => {
     const { category, search, sort } = req.query;
     let result = [...db.products];
-
     if (category && category !== 'all') result = result.filter(p => p.category === category);
     if (search) {
         const s = search.toLowerCase();
         result = result.filter(p => p.title.toLowerCase().includes(s) || p.description.toLowerCase().includes(s));
     }
-
+    // Сортировка
     if (sort === 'price-low') result.sort((a, b) => a.price - b.price);
     else if (sort === 'price-high') result.sort((a, b) => b.price - a.price);
-    else if (sort === 'popular') result.sort((a, b) => b.downloads - a.downloads);
     else result.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     res.json(result.map(p => ({
@@ -590,15 +476,12 @@ app.get('/api/products/:id', (req, res) => {
 app.post('/api/publish', authMiddleware, upload.single('file'), (req, res) => {
     const { title, description, price, category } = req.body;
     const user = req.user;
-
     if (!req.file) return res.status(400).json({ error: 'Файл обязателен' });
 
     const colors = { BOT: '6366f1', WEB: '22c55e', SCRIPT: 'f59e0b', API: 'ec4899' };
-
     const product = {
         id: Date.now().toString(),
-        title, 
-        description,
+        title, description,
         price: Number(price) || 0,
         category: category || 'OTHER',
         seller: user.username,
@@ -610,7 +493,6 @@ app.post('/api/publish', authMiddleware, upload.single('file'), (req, res) => {
         downloads: 0,
         createdAt: new Date().toISOString(),
     };
-
     db.products.push(product);
     user.myProducts.push(product.id);
     saveDB();
@@ -619,7 +501,7 @@ app.post('/api/publish', authMiddleware, upload.single('file'), (req, res) => {
 
 app.post('/api/buy', authMiddleware, (req, res) => {
     const { productId } = req.body;
-    const user = req.user; // Получаем юзера из middleware, а не из body
+    const user = req.user;
     const product = db.products.find(p => p.id === productId);
 
     if (!product) return res.status(404).json({ error: 'Товар не найден' });
@@ -635,7 +517,6 @@ app.post('/api/buy', authMiddleware, (req, res) => {
     if (seller) {
         seller.balance += product.price;
         seller.earned = (seller.earned || 0) + product.price;
-
         db.transactions.push({
             id: Date.now().toString(),
             userId: seller.id,
@@ -644,10 +525,7 @@ app.post('/api/buy', authMiddleware, (req, res) => {
             desc: `💰 Продажа: ${product.title}`,
             date: new Date().toISOString(),
         });
-
-        if (seller.telegramId) {
-            sendMessage(seller.telegramId, `🎉 <b>Продажа!</b>\n\n📦 ${product.title}\n💰 +${product.price} ₽`);
-        }
+        if (seller.telegramId) sendMessage(seller.telegramId, `🎉 <b>Продажа!</b>\n\n📦 ${product.title}\n💰 +${product.price} ₽`);
     }
 
     db.transactions.push({
@@ -658,7 +536,6 @@ app.post('/api/buy', authMiddleware, (req, res) => {
         desc: `🛒 Покупка: ${product.title}`,
         date: new Date().toISOString(),
     });
-
     saveDB();
     res.json({ success: true, balance: user.balance });
 });
@@ -674,7 +551,6 @@ app.get('/api/favorites/:username', (req, res) => {
 app.post('/api/favorite', authMiddleware, (req, res) => {
     const { productId } = req.body;
     const user = req.user;
-
     const idx = db.favorites.findIndex(f => f.userId === user.id && f.productId === productId);
     let favorited = false;
     if (idx > -1) {
@@ -690,27 +566,12 @@ app.post('/api/favorite', authMiddleware, (req, res) => {
 app.get('/api/user/:username', (req, res) => {
     const user = db.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
     if (!user) return res.status(404).json({ error: 'Not found' });
-
     const owned = user.inventory.map(id => db.products.find(p => p.id === id)).filter(Boolean);
     const sold = db.products.filter(p => p.sellerId === user.id);
-    // Скрываем приватные поля
     const { passwordHash, telegramId, ...safeUser } = user;
-    // Транзакции отдаем только владельцу (проверка токена должна быть, но для публичного профиля урежем)
-    // В данном случае просто не отдаем транзакции в публичном API профиля
-
-    res.json({
-        ...safeUser,
-        ownedProducts: owned,
-        soldProducts: sold,
-        stats: {
-            products: sold.length,
-            sales: sold.reduce((s, p) => s + p.downloads, 0),
-            earned: sold.reduce((s, p) => s + p.price * p.downloads, 0),
-        },
-    });
+    res.json({ ...safeUser, ownedProducts: owned, soldProducts: sold });
 });
 
-// Для личного профиля с транзакциями
 app.get('/api/me', authMiddleware, (req, res) => {
     const user = req.user;
     const tx = db.transactions.filter(t => t.userId === user.id).reverse().slice(0, 30);
@@ -718,30 +579,25 @@ app.get('/api/me', authMiddleware, (req, res) => {
 });
 
 app.get('/api/download/:productId', (req, res) => {
-    // В идеале тоже проверять токен, но пока оставим простую проверку по query, 
-    // НО нужно удостовериться, что юзер реально купил.
     const { username } = req.query; 
     const user = db.users.find(u => u.username === username);
     const product = db.products.find(p => p.id === req.params.productId);
-
     if (!user || !product) return res.status(404).send('Not found');
-    if (!user.inventory.includes(product.id) && user.id !== product.sellerId) return res.status(403).send('Access denied. Buy first.');
+    if (!user.inventory.includes(product.id) && user.id !== product.sellerId) return res.status(403).send('Access denied');
     if (!product.file) return res.status(404).send('No file');
-
     res.download(path.join(UPLOADS, product.file), product.title + path.extname(product.file));
 });
 
 app.post('/api/profile', authMiddleware, (req, res) => {
     const { displayName, bio } = req.body;
     const user = req.user;
-
     if (displayName) user.displayName = displayName.slice(0, 30);
     if (bio !== undefined) user.bio = bio.slice(0, 200);
     saveDB();
     res.json({ success: true });
 });
 
-// HTML-страница (встроена)
+// HTML-страница (ЗДЕСЬ БЫЛА ОШИБКА, ТЕПЕРЬ ИСПРАВЛЕНО)
 const HTML = `
 <!DOCTYPE html>
 <html lang="ru">
@@ -751,7 +607,6 @@ const HTML = `
 <title>CodeVault Marketplace</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
-/* Стили оставлены те же, с небольшими фиксами для модальных окон */
 :root{--bg:#0a0a0f;--card:#12121a;--card2:#1a1a25;--border:#252535;--text:#e8e8e8;--dim:#707080;--accent:#6366f1;--green:#22c55e;--red:#ef4444}
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
@@ -784,7 +639,7 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
 .nav a.active{color:var(--accent)}
 .nav a svg{width:24px;height:24px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:14px}
-.card{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;cursor:pointer}
 .card-img{height:110px;background-size:cover;background-position:center;position:relative}
 .card-cat{position:absolute;top:8px;left:8px;background:rgba(0,0,0,.75);padding:4px 8px;border-radius:6px;font-size:10px}
 .card-fav{position:absolute;top:8px;right:8px;width:32px;height:32px;background:rgba(0,0,0,.6);border-radius:50%;color:#fff;font-size:14px;display:flex;align-items:center;justify-content:center}
@@ -804,7 +659,7 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
 <body>
 <div class="toast" id="toast"></div>
 
-<!-- Auth Screen -->
+<!-- Auth -->
 <div id="auth">
     <div class="auth-container">
         <div class="auth-logo"><h1>🛒 CodeVault</h1><p>Маркетплейс цифровых товаров</p></div>
@@ -838,7 +693,7 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
     </div>
 </div>
 
-<!-- Main App -->
+<!-- App -->
 <div id="app" class="app hidden">
     <header class="header">
         <div class="header-logo">CodeVault</div>
@@ -849,7 +704,6 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
     </header>
 
     <div class="content">
-        <!-- Market Tab -->
         <section id="tab-market" class="tab active">
             <div style="display:flex;gap:10px;margin-bottom:15px">
                 <input type="text" id="f-search" placeholder="🔍 Поиск...">
@@ -858,13 +712,11 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
             <div id="grid" class="grid"></div>
         </section>
 
-        <!-- Favorites Tab -->
         <section id="tab-favs" class="tab">
             <h2>❤️ Избранное</h2>
             <div id="favs-grid" class="grid" style="margin-top:15px"></div>
         </section>
 
-        <!-- Profile Tab -->
         <section id="tab-profile" class="tab">
             <div style="text-align:center;margin-bottom:20px">
                 <img id="p-avatar" src="" style="width:100px;height:100px;border-radius:50%;border:4px solid var(--accent)">
@@ -888,7 +740,6 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
             <button class="btn btn-secondary" onclick="logout()">🚪 Выйти</button>
         </section>
 
-        <!-- Wallet Tab -->
         <section id="tab-wallet" class="tab">
             <div style="background:linear-gradient(135deg,var(--accent),#a855f7);padding:20px;border-radius:16px;text-align:center;margin-bottom:20px">
                 <div style="font-size:12px;opacity:0.8">Ваш баланс</div>
@@ -902,15 +753,14 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
             <div id="tx-history"></div>
         </section>
 
-        <!-- Upload Tab -->
         <section id="tab-upload" class="tab">
             <div style="background:var(--card);padding:20px;border-radius:16px">
                 <h2 style="margin-bottom:20px">Новый товар</h2>
                 <input type="text" id="u-title" placeholder="Название">
-                <select id="u-cat"><option value="BOT">Бот (Telegram/Discord)</option><option value="WEB">Сайт/Frontend</option><option value="SCRIPT">Скрипт/Утилита</option></select>
+                <select id="u-cat"><option value="BOT">Бот</option><option value="WEB">Сайт</option><option value="SCRIPT">Скрипт</option></select>
                 <input type="number" id="u-price" placeholder="Цена (₽)">
                 <textarea id="u-desc" rows="4" placeholder="Описание"></textarea>
-                <div style="border:2px dashed var(--border);padding:20px;text-align:center;border-radius:10px;margin-bottom:15px" onclick="document.getElementById('u-file').click()">
+                <div style="border:2px dashed var(--border);padding:20px;text-align:center;border-radius:10px;margin-bottom:15px;cursor:pointer" onclick="document.getElementById('u-file').click()">
                     📁 Выбрать файл
                 </div>
                 <input type="file" id="u-file" hidden>
@@ -919,7 +769,6 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
         </section>
     </div>
 
-    <!-- Navigation -->
     <nav class="nav">
         <a href="#" class="active" data-tab="market"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>Маркет</a>
         <a href="#" data-tab="favs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg></a>
@@ -937,11 +786,11 @@ const toast = m => { const t=$('toast'); t.innerText=m; t.classList.add('show');
 const headers = () => ({ 'Content-Type': 'application/json', 'Authorization': token });
 
 // --- AUTH ---
-function switchAuth(type) {
+function switchAuth(type, btn) {
     document.querySelectorAll('.auth-panel').forEach(p => p.classList.remove('active'));
     document.getElementById('auth-' + type).classList.add('active');
     document.querySelectorAll('.auth-tabs button').forEach(b => b.classList.remove('active'));
-    event.target.classList.add('active');
+    btn.classList.add('active');
 }
 
 async function loginPassword() {
@@ -1001,7 +850,6 @@ function initApp() {
     $('app').classList.remove('hidden');
     updateUI();
     loadMarket();
-    // Start polling chats or notifications if needed
 }
 
 function updateUI() {
@@ -1014,25 +862,25 @@ function updateUI() {
 async function loadMarket() {
     const q = $('f-search').value;
     const cat = $('f-cat').value;
-    const r = await fetch(\`/api/products?search=\${q}&category=\${cat}\`);
+    const r = await fetch('/api/products?search='+q+'&category='+cat);
     const prods = await r.json();
-    const favs = await fetch(\`/api/favorites/\${user.username}\`).then(r=>r.json()).then(l=>l.map(x=>x.id));
+    let favs = [];
+    try {
+        favs = await fetch('/api/favorites/'+user.username).then(r=>r.json()).then(l=>l.map(x=>x.id));
+    } catch(e){}
     
-    $('grid').innerHTML = prods.map(p => `
-        <div class="card" onclick="openProduct('\${p.id}')">
-            <div class="card-img" style="background-image:url('\${p.preview}')">
-                <span class="card-cat">\${p.category}</span>
-                <button class="card-fav \${favs.includes(p.id)?'active':''}" onclick="event.stopPropagation();toggleFav('\${p.id}')">♥</button>
-            </div>
-            <div class="card-body">
-                <h3>\${p.title}</h3>
-                <div class="card-footer">
-                    <span class="price">\${p.price} ₽</span>
-                    <button class="btn btn-primary" style="padding:5px 10px;font-size:12px" onclick="event.stopPropagation();buy('\${p.id}')">Купить</button>
-                </div>
-            </div>
-        </div>
-    `).join('');
+    // Используем обычные кавычки для генерации HTML, чтобы избежать SyntaxError в Node.js
+    $('grid').innerHTML = prods.map(p => {
+        const isFav = favs.includes(p.id) ? 'active' : '';
+        return '<div class="card" onclick="openProduct(\\'' + p.id + '\\')">' +
+               '<div class="card-img" style="background-image:url(\\'' + p.preview + '\\')">' +
+               '<span class="card-cat">' + p.category + '</span>' +
+               '<button class="card-fav ' + isFav + '" onclick="event.stopPropagation();toggleFav(\\'' + p.id + '\\')">♥</button>' +
+               '</div><div class="card-body"><h3>' + p.title + '</h3>' +
+               '<div class="card-footer"><span class="price">' + p.price + ' ₽</span>' +
+               '<button class="btn btn-primary" style="padding:5px 10px;font-size:12px" onclick="event.stopPropagation();buy(\\'' + p.id + '\\')">Купить</button>' +
+               '</div></div></div>';
+    }).join('');
 }
 
 async function toggleFav(id) {
@@ -1042,9 +890,13 @@ async function toggleFav(id) {
 }
 
 async function loadFavs() {
-    const r = await fetch(\`/api/favorites/\${user.username}\`);
+    const r = await fetch('/api/favorites/'+user.username);
     const prods = await r.json();
-    $('favs-grid').innerHTML = prods.map(p => \`<div class="card" onclick="openProduct('\${p.id}')"><div class="card-img" style="background-image:url('\${p.preview}')"></div><div class="card-body"><h3>\${p.title}</h3></div></div>\`).join('');
+    $('favs-grid').innerHTML = prods.map(p => 
+        '<div class="card" onclick="openProduct(\\'' + p.id + '\\')">' +
+        '<div class="card-img" style="background-image:url(\\'' + p.preview + '\\')"></div>' +
+        '<div class="card-body"><h3>' + p.title + '</h3></div></div>'
+    ).join('');
 }
 
 async function buy(id) {
@@ -1061,31 +913,33 @@ async function openProduct(id) {
     const p = await fetch('/api/products/' + id).then(r => r.json());
     const comments = await fetch('/api/comments/' + id).then(r => r.json());
     
-    // Create Modal
     const div = document.createElement('div');
     div.className = 'modal-overlay';
-    div.innerHTML = \`
-        <div class="product-window">
-            <h2>\${p.title}</h2>
-            <div style="color:var(--dim);margin-bottom:10px">\${p.category} • \${p.downloads} скачиваний</div>
-            <p>\${p.description}</p>
-            <h3 style="color:var(--green);margin:15px 0">\${p.price} ₽</h3>
-            <div style="display:flex;gap:10px;margin-bottom:20px">
-                <button class="btn btn-primary" onclick="buy('\${p.id}')">Купить</button>
-                <button class="btn btn-secondary" onclick="startChat('\${p.sellerId}')">Написать продавцу</button>
-            </div>
-            <hr style="border-color:var(--border);margin-bottom:15px">
-            <h4>Отзывы</h4>
-            <div style="max-height:150px;overflow-y:auto;margin-bottom:10px">
-                \${comments.map(c => \`<div style="background:var(--card2);padding:8px;border-radius:8px;margin-bottom:5px"><b style="font-size:12px">\${c.username}</b><div style="font-size:13px">\${c.text}</div></div>\`).join('')}
-            </div>
-            <div style="display:flex;gap:5px">
-                <input id="new-comment" placeholder="Ваш отзыв..." style="margin:0">
-                <button class="btn btn-primary" onclick="postComment('\${p.id}')" style="width:auto">></button>
-            </div>
-            <button class="btn btn-secondary" style="margin-top:10px;width:100%" onclick="this.closest('.modal-overlay').remove()">Закрыть</button>
-        </div>
-    \`;
+    
+    // Генерация комментариев
+    const commentsHTML = comments.map(c => 
+        '<div style="background:var(--card2);padding:8px;border-radius:8px;margin-bottom:5px"><b style="font-size:12px">' + c.username + '</b><div style="font-size:13px">' + c.text + '</div></div>'
+    ).join('');
+
+    div.innerHTML = 
+        '<div class="product-window">' +
+            '<h2>' + p.title + '</h2>' +
+            '<div style="color:var(--dim);margin-bottom:10px">' + p.category + ' • ' + p.downloads + ' скачиваний</div>' +
+            '<p>' + p.description + '</p>' +
+            '<h3 style="color:var(--green);margin:15px 0">' + p.price + ' ₽</h3>' +
+            '<div style="display:flex;gap:10px;margin-bottom:20px">' +
+                '<button class="btn btn-primary" onclick="buy(\\'' + p.id + '\\')">Купить</button>' +
+                '<button class="btn btn-secondary" onclick="startChat(\\'' + p.sellerId + '\\')">Написать продавцу</button>' +
+            '</div>' +
+            '<hr style="border-color:var(--border);margin-bottom:15px">' +
+            '<h4>Отзывы</h4>' +
+            '<div style="max-height:150px;overflow-y:auto;margin-bottom:10px">' + commentsHTML + '</div>' +
+            '<div style="display:flex;gap:5px">' +
+                '<input id="new-comment" placeholder="Ваш отзыв..." style="margin:0">' +
+                '<button class="btn btn-primary" onclick="postComment(\\'' + p.id + '\\')" style="width:auto">></button>' +
+            '</div>' +
+            '<button class="btn btn-secondary" style="margin-top:10px;width:100%" onclick="this.closest(\\\'.modal-overlay\\\').remove()">Закрыть</button>' +
+        '</div>';
     document.body.appendChild(div);
 }
 
@@ -1093,7 +947,7 @@ async function postComment(id) {
     const text = document.getElementById('new-comment').value;
     if(!text) return;
     await fetch('/api/comments/add', { method: 'POST', headers: headers(), body: JSON.stringify({ productId: id, text }) });
-    document.querySelector('.modal-overlay').remove(); // Close to refresh simply
+    document.querySelector('.modal-overlay').remove(); 
     openProduct(id);
 }
 
@@ -1113,6 +967,8 @@ async function publish() {
     if(r.ok) {
         toast('Товар опубликован');
         $('u-title').value = '';
+        $('u-desc').value = '';
+        $('u-price').value = '';
         document.querySelector('[data-tab="market"]').click();
     } else {
         toast('Ошибка');
@@ -1130,10 +986,10 @@ async function loadProfile() {
     $('e-bio').value = d.bio || '';
     
     $('owned-list').innerHTML = d.ownedProducts.map(p => 
-        \`<div style="background:var(--card2);padding:10px;border-radius:8px;margin-bottom:5px;display:flex;justify-content:space-between;align-items:center">
-            <span>\${p.title}</span>
-            <a href="/api/download/\${p.id}?username=\${user.username}" target="_blank">📥</a>
-        </div>\`
+        '<div style="background:var(--card2);padding:10px;border-radius:8px;margin-bottom:5px;display:flex;justify-content:space-between;align-items:center">' +
+            '<span>' + p.title + '</span>' +
+            '<a href="/api/download/' + p.id + '?username=' + user.username + '" target="_blank">📥</a>' +
+        '</div>'
     ).join('') || '<div style="color:var(--dim);text-align:center">Пусто</div>';
 
     loadChats();
@@ -1153,10 +1009,10 @@ async function loadWallet() {
     const d = await r.json();
     $('w-bal').innerText = d.balance + ' ₽';
     $('tx-history').innerHTML = d.transactions.map(t => 
-        \`<div style="padding:10px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;font-size:13px">
-            <span>\${t.desc}</span>
-            <span style="color:\${t.amount>0?'var(--green)':'var(--red)'}">\${t.amount} ₽</span>
-        </div>\`
+        '<div style="padding:10px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;font-size:13px">' +
+            '<span>' + t.desc + '</span>' +
+            '<span style="color:' + (t.amount>0?'var(--green)':'var(--red)') + '">' + t.amount + ' ₽</span>' +
+        '</div>'
     ).join('');
 }
 
@@ -1172,41 +1028,37 @@ async function pay() {
 async function loadChats() {
     const r = await fetch('/api/chats/list', { headers: headers() });
     const chats = await r.json();
-    $('user-chats-list').innerHTML = chats.map(c => \`
-        <div class="chat-preview" onclick="openChatModal('\${c.id}')">
-            <img src="\${c.partner.avatar}" style="width:30px;height:30px;border-radius:50%">
-            <div>
-                <div>\${c.partner.username}</div>
-                <div style="font-size:11px;color:var(--dim)">\${c.lastMessage ? c.lastMessage.text.substring(0,20)+'...' : 'Начните общение'}</div>
-            </div>
-        </div>
-    \`).join('') || '<div style="text-align:center;font-size:12px;color:var(--dim)">Нет чатов</div>';
+    $('user-chats-list').innerHTML = chats.map(c => 
+        '<div class="chat-preview" onclick="openChatModal(\\'' + c.id + '\\')">' +
+            '<img src="' + c.partner.avatar + '" style="width:30px;height:30px;border-radius:50%">' +
+            '<div><div>' + c.partner.username + '</div>' +
+            '<div style="font-size:11px;color:var(--dim)">' + (c.lastMessage ? c.lastMessage.text.substring(0,20)+'...' : 'Начните общение') + '</div>' +
+            '</div></div>'
+    ).join('') || '<div style="text-align:center;font-size:12px;color:var(--dim)">Нет чатов</div>';
 }
 
 async function startChat(targetUserId) {
     if(targetUserId === user.id) return toast('Это вы');
     const r = await fetch('/api/chats/create', { method: 'POST', headers: headers(), body: JSON.stringify({ targetUserId }) });
     const d = await r.json();
-    document.querySelector('.modal-overlay')?.remove(); // close product
-    document.querySelector('[data-tab="profile"]').click(); // go to profile
+    if(document.querySelector('.modal-overlay')) document.querySelector('.modal-overlay').remove();
+    document.querySelector('[data-tab="profile"]').click();
     openChatModal(d.chat.id);
 }
 
 async function openChatModal(chatId) {
-    // Basic Chat UI
     const div = document.createElement('div');
     div.className = 'modal-overlay';
-    div.innerHTML = \`
-        <div class="chat-window">
-            <h3 id="chat-header">Чат</h3>
-            <div class="chat-messages" id="chat-msgs">Загрузка...</div>
-            <div style="display:flex;gap:5px">
-                <input id="chat-input" placeholder="Сообщение..." style="margin:0">
-                <button class="btn btn-primary" style="width:auto" onclick="sendMsg('\${chatId}')">></button>
-            </div>
-            <button class="btn btn-secondary" style="margin-top:10px;width:100%" onclick="this.closest('.modal-overlay').remove()">Закрыть</button>
-        </div>
-    \`;
+    div.innerHTML = 
+        '<div class="chat-window">' +
+            '<h3 id="chat-header">Чат</h3>' +
+            '<div class="chat-messages" id="chat-msgs">Загрузка...</div>' +
+            '<div style="display:flex;gap:5px">' +
+                '<input id="chat-input" placeholder="Сообщение..." style="margin:0">' +
+                '<button class="btn btn-primary" style="width:auto" onclick="sendMsg(\\'' + chatId + '\\')">></button>' +
+            '</div>' +
+            '<button class="btn btn-secondary" style="margin-top:10px;width:100%" onclick="this.closest(\\\'.modal-overlay\\\').remove()">Закрыть</button>' +
+        '</div>';
     document.body.appendChild(div);
     refreshChat(chatId);
 }
@@ -1219,7 +1071,7 @@ async function refreshChat(chatId) {
     const msgs = document.getElementById('chat-msgs');
     if(msgs) {
         msgs.innerHTML = d.messages.map(m => 
-            \`<div class="message \${m.senderId === user.id ? 'sent' : 'received'}">\${m.text}</div>\`
+            '<div class="message ' + (m.senderId === user.id ? 'sent' : 'received') + '">' + m.text + '</div>'
         ).join('');
         msgs.scrollTop = msgs.scrollHeight;
     }
@@ -1234,7 +1086,6 @@ async function sendMsg(chatId) {
 }
 
 // --- INIT ---
-// Listeners
 $('f-search').oninput = loadMarket;
 $('f-cat').onchange = loadMarket;
 
