@@ -8,7 +8,7 @@ const crypto = require('crypto');
 // КОНФИГУРАЦИЯ
 // ═══════════════════════════════════════════════════════════
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const PORT = process.env.PORT || 7777; // Изменил порт на 7777
+const PORT = process.env.PORT || 7777;
 const WEBHOOK_PATH = BOT_TOKEN ? `/webhook/${BOT_TOKEN}` : '/webhook/disabled';
 const DOMAIN = process.env.DOMAIN || 'https://marketplacebot.bothost.ru';
 
@@ -39,7 +39,7 @@ let users = [];
 let products = [];
 let transactions = [];
 let favorites = [];
-let registrationCodes = []; // Новое: коды регистрации
+let registrationCodes = [];
 
 // Хеширование пароля
 function hashPassword(password) {
@@ -119,7 +119,6 @@ app.post(WEBHOOK_PATH, async (req, res) => {
             );
         }
         else if (text === "📝 Регистрация" || text === "/register") {
-            // Проверяем, есть ли уже пользователь с таким Telegram ID
             const existingUser = users.find(u => u.telegramId === from.id);
             
             if (existingUser) {
@@ -132,18 +131,16 @@ app.post(WEBHOOK_PATH, async (req, res) => {
                 return;
             }
             
-            // Проверяем, есть ли уже активный код для этого пользователя
             let existingCode = registrationCodes.find(c => c.telegramId === from.id && c.expiresAt > Date.now());
             
             if (!existingCode) {
-                // Создаем новый код
                 const code = generateRegCode();
                 existingCode = {
                     code: code,
                     telegramId: from.id,
                     username: from.username || from.first_name,
                     createdAt: Date.now(),
-                    expiresAt: Date.now() + (15 * 60 * 1000) // 15 минут
+                    expiresAt: Date.now() + (15 * 60 * 1000)
                 };
                 
                 registrationCodes.push(existingCode);
@@ -259,7 +256,6 @@ app.post('/api/register', (req, res) => {
     
     let telegramId = null;
     
-    // Проверяем код Telegram, если он указан
     if (telegramCode) {
         const codeData = registrationCodes.find(c => 
             c.code === telegramCode.toUpperCase() && 
@@ -272,8 +268,6 @@ app.post('/api/register', (req, res) => {
         }
         
         telegramId = codeData.telegramId;
-        
-        // Удаляем использованный код
         registrationCodes = registrationCodes.filter(c => c.code !== telegramCode.toUpperCase());
         console.log(`✅ Код Telegram использован: ${telegramCode}`);
     }
@@ -306,7 +300,6 @@ app.post('/api/register', (req, res) => {
     
     console.log('✅ Пользователь зарегистрирован:', username);
     
-    // Отправляем уведомление в Telegram, если аккаунт привязан
     if (telegramId) {
         sendMessage(telegramId,
             `🎉 *Регистрация успешна!*\n\n` +
@@ -361,7 +354,6 @@ app.post('/api/link-telegram', (req, res) => {
     res.json({ success: true });
 });
 
-// Новый API: проверка кода регистрации
 app.post('/api/check-telegram-code', (req, res) => {
     const { code } = req.body;
     
@@ -601,7 +593,7 @@ app.get('/api/test', (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════
-// HTML СТРАНИЦА (с исправленной формой регистрации)
+// HTML СТРАНИЦА (ИСПРАВЛЕННАЯ)
 // ═══════════════════════════════════════════════════════════
 const HTML = `<!DOCTYPE html>
 <html lang="ru">
@@ -833,7 +825,7 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
             <input type="password" id="reg-password2" placeholder="Повторите пароль">
         </div>
         
-        <button class="btn btn-main" id="register-btn">Зарегистрироваться</button>
+        <button class="btn btn-main" onclick="register()">Зарегистрироваться</button>
         <p style="margin-top:20px">Уже есть аккаунт? <a href="#" class="btn-link" onclick="showLogin()">Войти</a></p>
     </div>
 </div>
@@ -946,14 +938,7 @@ function showRegister() {
     $('register-screen').classList.remove('hidden');
 }
 
-// Исправленная функция регистрации
-document.addEventListener('DOMContentLoaded', function() {
-    const registerBtn = $('register-btn');
-    if (registerBtn) {
-        registerBtn.addEventListener('click', register);
-    }
-});
-
+// ИСПРАВЛЕННАЯ функция регистрации с onclick в HTML
 async function register() {
     console.log('📝 Начало регистрации');
     
@@ -972,7 +957,10 @@ async function register() {
         return toast('Пароли не совпадают');
     }
     
-    const btn = $('register-btn');
+    // Находим кнопку через event.target или querySelector
+    const btn = event.target || document.querySelector('#register-screen .btn-main');
+    const originalText = btn.textContent;
+    
     btn.disabled = true;
     btn.textContent = 'Регистрация...';
     
@@ -982,17 +970,22 @@ async function register() {
             payload.telegramCode = telegramCode;
         }
         
+        console.log('📡 Отправка запроса регистрации:', payload);
+        
         const res = await fetch('/api/register', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
         
+        console.log('📡 Статус ответа:', res.status);
+        
         const data = await res.json();
+        console.log('📡 Данные ответа:', data);
         
         if (!res.ok) {
             btn.disabled = false;
-            btn.textContent = 'Зарегистрироваться';
+            btn.textContent = originalText;
             return toast(data.error || 'Ошибка при регистрации');
         }
         
@@ -1006,7 +999,7 @@ async function register() {
     } catch (err) {
         console.error('❌ Ошибка регистрации:', err);
         btn.disabled = false;
-        btn.textContent = 'Зарегистрироваться';
+        btn.textContent = originalText;
         toast('Ошибка соединения');
     }
 }
@@ -1053,30 +1046,33 @@ function updateUI() {
 }
 
 // Проверка кода в реальном времени
-$('telegram-code').addEventListener('input', async function() {
-    const code = this.value.trim();
-    if (code.length >= 6) {
-        try {
-            const res = await fetch('/api/check-telegram-code', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ code })
-            });
-            
-            if (res.ok) {
-                const data = await res.json();
-                this.style.borderColor = 'var(--green)';
-                toast(\`Код подтвержден! (\${data.expiresIn} мин. до истечения)\`);
-            } else {
-                this.style.borderColor = 'var(--red)';
+const telegramCodeInput = $('telegram-code');
+if (telegramCodeInput) {
+    telegramCodeInput.addEventListener('input', async function() {
+        const code = this.value.trim();
+        if (code.length >= 6) {
+            try {
+                const res = await fetch('/api/check-telegram-code', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code })
+                });
+                
+                if (res.ok) {
+                    const data = await res.json();
+                    this.style.borderColor = 'var(--green)';
+                    toast(\`Код подтвержден! (\${data.expiresIn} мин. до истечения)\`);
+                } else {
+                    this.style.borderColor = 'var(--red)';
+                }
+            } catch (err) {
+                console.log('Ошибка проверки кода:', err);
             }
-        } catch (err) {
-            console.log('Ошибка проверки кода:', err);
+        } else {
+            this.style.borderColor = 'var(--border)';
         }
-    } else {
-        this.style.borderColor = 'var(--border)';
-    }
-});
+    });
+}
 
 document.querySelectorAll('.nav a').forEach(a => {
     a.onclick = e => {
@@ -1094,8 +1090,11 @@ document.querySelectorAll('.nav a').forEach(a => {
 });
 
 ['f-search', 'f-cat', 'f-sort'].forEach(id => {
-    $(id).addEventListener('input', loadMarket);
-    $(id).addEventListener('change', loadMarket);
+    const element = $(id);
+    if (element) {
+        element.addEventListener('input', loadMarket);
+        element.addEventListener('change', loadMarket);
+    }
 });
 
 async function loadMarket() {
