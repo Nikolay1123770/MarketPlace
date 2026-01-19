@@ -8,7 +8,7 @@ const crypto = require('crypto');
 // КОНФИГУРАЦИЯ
 // ═══════════════════════════════════════════════════════════
 const BOT_TOKEN = process.env.BOT_TOKEN || '8035930401:AAH4bICwB8LVXApFEIaLmOlsYD9PyO5sylI';
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080; // Изменил с 3000 на 8080
 const WEBHOOK_PATH = `/webhook/${BOT_TOKEN}`;
 const DOMAIN = process.env.DOMAIN || 'https://marketplacebot.bothost.ru';
 
@@ -1109,15 +1109,15 @@ async function publish() {
 app.get('/', (req, res) => res.send(HTML));
 
 // ═══════════════════════════════════════════════════════════
-// ЗАПУСК
+// ЗАПУСК С ОБРАБОТКОЙ ОШИБОК
 // ═══════════════════════════════════════════════════════════
-app.listen(PORT, async () => {
-    console.log(`CodeVault запущен на порту ${PORT}`);
+const server = app.listen(PORT, async () => {
+    console.log(`✅ CodeVault запущен на порту ${PORT}`);
     
     // Устанавливаем вебхук для бота
     if (BOT_TOKEN && BOT_TOKEN !== '8035930401:AAH4bICwB8LVXApFEIaLmOlsYD9PyO5sylI') {
         const webhookUrl = `${DOMAIN}${WEBHOOK_PATH}`;
-        console.log(`Настройка вебхука: ${webhookUrl}`);
+        console.log(`🔄 Настройка вебхука: ${webhookUrl}`);
         
         try {
             const res = await fetch(`${TELEGRAM_API}/setWebhook?url=${webhookUrl}`);
@@ -1134,4 +1134,37 @@ app.listen(PORT, async () => {
     } else {
         console.warn('⚠️ Бот выключен (не указан токен)');
     }
+});
+
+// Обработка ошибок сервера
+server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        console.error(`❌ Порт ${PORT} уже используется!`);
+        console.log('🔄 Попытка использовать случайный порт...');
+        
+        // Пробуем использовать случайный порт
+        const randomPort = Math.floor(Math.random() * 10000) + 10000;
+        app.listen(randomPort, () => {
+            console.log(`✅ Сервер запущен на резервном порту ${randomPort}`);
+        });
+    } else {
+        console.error('❌ Ошибка запуска сервера:', err);
+    }
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('🔄 Получен сигнал SIGTERM, завершение работы...');
+    server.close(() => {
+        console.log('✅ Сервер остановлен');
+        process.exit(0);
+    });
+});
+
+process.on('SIGINT', () => {
+    console.log('🔄 Получен сигнал SIGINT, завершение работы...');
+    server.close(() => {
+        console.log('✅ Сервер остановлен');
+        process.exit(0);
+    });
 });
