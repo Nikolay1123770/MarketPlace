@@ -8,19 +8,14 @@ const crypto = require('crypto');
 // КОНФИГУРАЦИЯ
 // ═══════════════════════════════════════════════════════════
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 7777; // Изменил порт на 7777
 const WEBHOOK_PATH = BOT_TOKEN ? `/webhook/${BOT_TOKEN}` : '/webhook/disabled';
 const DOMAIN = process.env.DOMAIN || 'https://marketplacebot.bothost.ru';
 
 console.log('🔧 Конфигурация:');
-console.log(`📍 Порт: ${PORT || 'НЕ УСТАНОВЛЕН'}`);
+console.log(`📍 Порт: ${PORT}`);
 console.log(`🤖 Бот токен: ${BOT_TOKEN ? 'Установлен ✅' : 'Не установлен ❌'}`);
 console.log(`🌐 Домен: ${DOMAIN}`);
-
-if (!PORT) {
-    console.error('❌ КРИТИЧЕСКАЯ ОШИБКА: Переменная PORT не установлена!');
-    process.exit(1);
-}
 
 const app = express();
 app.use(express.json());
