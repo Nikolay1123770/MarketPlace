@@ -8,7 +8,7 @@ const crypto = require('crypto');
 // КОНФИГУРАЦИЯ
 // ═══════════════════════════════════════════════════════════
 const BOT_TOKEN = process.env.BOT_TOKEN || '8035930401:AAH4bICwB8LVXApFEIaLmOlsYD9PyO5sylI';
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 const WEBHOOK_PATH = `/webhook/${BOT_TOKEN}`;
 const DOMAIN = 'https://marketplacebot.bothost.ru';
 const BOT_USERNAME = 'RegisterMarketPlace_bot';
