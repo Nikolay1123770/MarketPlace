@@ -238,7 +238,7 @@ app.post(WEBHOOK_PATH, async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 
 app.post('/api/register', (req, res) => {
-    console.log('📝 Попытка регистрации:', req.body.username);
+    console.log('📝 Попытка регистрации:', req.body);
     
     const { username, password, telegramCode } = req.body;
     
@@ -593,7 +593,7 @@ app.get('/api/test', (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════
-// HTML СТРАНИЦА (ИСПРАВЛЕННАЯ)
+// HTML СТРАНИЦА (ПОЛНОСТЬЮ ИСПРАВЛЕННАЯ)
 // ═══════════════════════════════════════════════════════════
 const HTML = `<!DOCTYPE html>
 <html lang="ru">
@@ -787,8 +787,8 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
             <input type="password" id="login-password" placeholder="Введите пароль">
         </div>
         
-        <button class="btn btn-main" onclick="login()">Войти</button>
-        <p style="margin-top:20px">Нет аккаунта? <a href="#" class="btn-link" onclick="showRegister()">Зарегистрироваться</a></p>
+        <button class="btn btn-main" id="login-btn">Войти</button>
+        <p style="margin-top:20px">Нет аккаунта? <a href="#" class="btn-link" id="show-register-btn">Зарегистрироваться</a></p>
     </div>
 </div>
 
@@ -804,7 +804,7 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
             <div class="input-group">
                 <label class="input-label">Код Telegram (необязательно)</label>
                 <input type="text" id="telegram-code" placeholder="Введите код из бота" style="text-transform: uppercase;">
-                <span class="input-hint">Напишите /register в боте @CodeVaultBot для получения кода</span>
+                <span class="input-hint">Напишите /register в боте для получения кода</span>
             </div>
         </div>
         
@@ -825,8 +825,8 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
             <input type="password" id="reg-password2" placeholder="Повторите пароль">
         </div>
         
-        <button class="btn btn-main" onclick="register()">Зарегистрироваться</button>
-        <p style="margin-top:20px">Уже есть аккаунт? <a href="#" class="btn-link" onclick="showLogin()">Войти</a></p>
+        <button class="btn btn-main" id="register-btn">Зарегистрироваться</button>
+        <p style="margin-top:20px">Уже есть аккаунт? <a href="#" class="btn-link" id="show-login-btn">Войти</a></p>
     </div>
 </div>
 
@@ -918,34 +918,128 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
 </div>
 
 <script>
-console.log('🚀 CodeVault загружается...');
+// Глобальные переменные
+let user = null;
+let favIds = [];
 
-let user=null,favIds=[];
-const $=id=>document.getElementById(id);
-const toast=m=>{console.log('📢 Toast:',m);const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2500)};
-const fmt=n=>new Intl.NumberFormat('ru-RU').format(n)+'₽';
-const esc=s=>{const d=document.createElement('div');d.textContent=s;return d.innerHTML};
+// Утилиты
+const $ = id => document.getElementById(id);
+const toast = m => {
+    console.log('📢 Toast:', m);
+    const t = $('toast');
+    if (t) {
+        t.textContent = m;
+        t.classList.add('show');
+        setTimeout(() => t.classList.remove('show'), 2500);
+    }
+};
+const fmt = n => new Intl.NumberFormat('ru-RU').format(n) + '₽';
+const esc = s => {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+};
+
+// Ждем загрузки DOM
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('🚀 CodeVault загружается...');
+    
+    // Инициализация обработчиков
+    initEventHandlers();
+    
+    console.log('✅ CodeVault загружен');
+});
+
+function initEventHandlers() {
+    // Кнопки авторизации
+    const loginBtn = $('login-btn');
+    const registerBtn = $('register-btn');
+    const showRegisterBtn = $('show-register-btn');
+    const showLoginBtn = $('show-login-btn');
+    
+    if (loginBtn) {
+        loginBtn.addEventListener('click', login);
+        console.log('✅ Обработчик кнопки входа добавлен');
+    }
+    
+    if (registerBtn) {
+        registerBtn.addEventListener('click', register);
+        console.log('✅ Обработчик кнопки регистрации добавлен');
+    }
+    
+    if (showRegisterBtn) {
+        showRegisterBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            showRegister();
+        });
+    }
+    
+    if (showLoginBtn) {
+        showLoginBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            showLogin();
+        });
+    }
+    
+    // Проверка кода Telegram
+    const telegramCodeInput = $('telegram-code');
+    if (telegramCodeInput) {
+        telegramCodeInput.addEventListener('input', checkTelegramCode);
+    }
+    
+    // Навигация
+    document.querySelectorAll('.nav a').forEach(a => {
+        a.onclick = e => {
+            e.preventDefault();
+            document.querySelectorAll('.nav a').forEach(x => x.classList.remove('active'));
+            document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+            a.classList.add('active');
+            $('tab-' + a.dataset.tab).classList.add('active');
+            
+            if (a.dataset.tab === 'market') loadMarket();
+            if (a.dataset.tab === 'favs') loadFavs();
+            if (a.dataset.tab === 'profile') loadProfile();
+            if (a.dataset.tab === 'wallet') loadWallet();
+        }
+    });
+    
+    // Фильтры
+    ['f-search', 'f-cat', 'f-sort'].forEach(id => {
+        const element = $(id);
+        if (element) {
+            element.addEventListener('input', loadMarket);
+            element.addEventListener('change', loadMarket);
+        }
+    });
+}
 
 function showLogin() {
     console.log('🔄 Показ экрана входа');
-    $('register-screen').classList.add('hidden');
-    $('auth').classList.remove('hidden');
+    const authDiv = $('auth');
+    const registerDiv = $('register-screen');
+    if (authDiv && registerDiv) {
+        registerDiv.classList.add('hidden');
+        authDiv.classList.remove('hidden');
+    }
 }
 
 function showRegister() {
     console.log('🔄 Показ экрана регистрации');
-    $('auth').classList.add('hidden');
-    $('register-screen').classList.remove('hidden');
+    const authDiv = $('auth');
+    const registerDiv = $('register-screen');
+    if (authDiv && registerDiv) {
+        authDiv.classList.add('hidden');
+        registerDiv.classList.remove('hidden');
+    }
 }
 
-// ИСПРАВЛЕННАЯ функция регистрации с onclick в HTML
 async function register() {
     console.log('📝 Начало регистрации');
     
-    const username = $('reg-username').value.trim();
-    const password = $('reg-password').value;
-    const password2 = $('reg-password2').value;
-    const telegramCode = $('telegram-code').value.trim();
+    const username = $('reg-username')?.value?.trim();
+    const password = $('reg-password')?.value;
+    const password2 = $('reg-password2')?.value;
+    const telegramCode = $('telegram-code')?.value?.trim();
     
     if (!username || username.length < 3) {
         return toast('Имя пользователя должно быть минимум 3 символа');
@@ -957,8 +1051,7 @@ async function register() {
         return toast('Пароли не совпадают');
     }
     
-    // Находим кнопку через event.target или querySelector
-    const btn = event.target || document.querySelector('#register-screen .btn-main');
+    const btn = $('register-btn');
     const originalText = btn.textContent;
     
     btn.disabled = true;
@@ -970,7 +1063,7 @@ async function register() {
             payload.telegramCode = telegramCode;
         }
         
-        console.log('📡 Отправка запроса регистрации:', payload);
+        console.log('📡 Отправка запроса регистрации');
         
         const res = await fetch('/api/register', {
             method: 'POST',
@@ -1005,12 +1098,20 @@ async function register() {
 }
 
 async function login() {
-    const username = $('login-name').value.trim();
-    const password = $('login-password').value;
+    console.log('🔑 Начало входа');
+    
+    const username = $('login-name')?.value?.trim();
+    const password = $('login-password')?.value;
     
     if (!username || !password) {
         return toast('Введите логин и пароль');
     }
+    
+    const btn = $('login-btn');
+    const originalText = btn.textContent;
+    
+    btn.disabled = true;
+    btn.textContent = 'Вход...';
     
     try {
         const res = await fetch('/api/login', {
@@ -1021,88 +1122,82 @@ async function login() {
         
         if (!res.ok) {
             const data = await res.json();
+            btn.disabled = false;
+            btn.textContent = originalText;
             return toast(data.error || 'Ошибка входа');
         }
         
         user = await res.json();
         onLogin();
+        toast('Добро пожаловать!');
     } catch (err) {
+        console.error('❌ Ошибка входа:', err);
+        btn.disabled = false;
+        btn.textContent = originalText;
         toast('Ошибка соединения');
     }
 }
 
 function onLogin() {
-    $('auth').classList.add('hidden');
-    $('register-screen').classList.add('hidden');
-    $('app').classList.remove('hidden');
-    updateUI();
-    loadMarket();
-    toast('Добро пожаловать, ' + user.displayName + '!');
+    console.log('🎉 Пользователь вошел в систему');
+    const authDiv = $('auth');
+    const registerDiv = $('register-screen');
+    const appDiv = $('app');
+    
+    if (authDiv && registerDiv && appDiv) {
+        authDiv.classList.add('hidden');
+        registerDiv.classList.add('hidden');
+        appDiv.classList.remove('hidden');
+        updateUI();
+        loadMarket();
+    }
 }
 
 function updateUI() {
-    $('h-avatar').src = user.avatar;
-    $('h-balance').textContent = fmt(user.balance);
+    const avatar = $('h-avatar');
+    const balance = $('h-balance');
+    
+    if (avatar && user?.avatar) {
+        avatar.src = user.avatar;
+    }
+    if (balance && user?.balance !== undefined) {
+        balance.textContent = fmt(user.balance);
+    }
 }
 
-// Проверка кода в реальном времени
-const telegramCodeInput = $('telegram-code');
-if (telegramCodeInput) {
-    telegramCodeInput.addEventListener('input', async function() {
-        const code = this.value.trim();
-        if (code.length >= 6) {
-            try {
-                const res = await fetch('/api/check-telegram-code', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ code })
-                });
-                
-                if (res.ok) {
-                    const data = await res.json();
-                    this.style.borderColor = 'var(--green)';
-                    toast(\`Код подтвержден! (\${data.expiresIn} мин. до истечения)\`);
-                } else {
-                    this.style.borderColor = 'var(--red)';
-                }
-            } catch (err) {
-                console.log('Ошибка проверки кода:', err);
+async function checkTelegramCode() {
+    const input = this;
+    const code = input.value.trim();
+    
+    if (code.length >= 6) {
+        try {
+            const res = await fetch('/api/check-telegram-code', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code })
+            });
+            
+            if (res.ok) {
+                const data = await res.json();
+                input.style.borderColor = 'var(--green)';
+                toast(\`Код подтвержден! (\${data.expiresIn} мин. до истечения)\`);
+            } else {
+                input.style.borderColor = 'var(--red)';
             }
-        } else {
-            this.style.borderColor = 'var(--border)';
+        } catch (err) {
+            console.log('Ошибка проверки кода:', err);
         }
-    });
+    } else {
+        input.style.borderColor = 'var(--border)';
+    }
 }
-
-document.querySelectorAll('.nav a').forEach(a => {
-    a.onclick = e => {
-        e.preventDefault();
-        document.querySelectorAll('.nav a').forEach(x => x.classList.remove('active'));
-        document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-        a.classList.add('active');
-        $('tab-' + a.dataset.tab).classList.add('active');
-        
-        if (a.dataset.tab === 'market') loadMarket();
-        if (a.dataset.tab === 'favs') loadFavs();
-        if (a.dataset.tab === 'profile') loadProfile();
-        if (a.dataset.tab === 'wallet') loadWallet();
-    }
-});
-
-['f-search', 'f-cat', 'f-sort'].forEach(id => {
-    const element = $(id);
-    if (element) {
-        element.addEventListener('input', loadMarket);
-        element.addEventListener('change', loadMarket);
-    }
-});
 
 async function loadMarket() {
     if (!user) return;
     
-    const search = $('f-search').value;
-    const cat = $('f-cat').value;
-    const sort = $('f-sort').value;
+    const search = $('f-search')?.value || '';
+    const cat = $('f-cat')?.value || 'all';
+    const sort = $('f-sort')?.value || 'newest';
     const params = new URLSearchParams();
     
     if (search) params.append('search', search);
@@ -1116,10 +1211,14 @@ async function loadMarket() {
         ]);
         
         favIds = favs.map(f => f.id);
-        $('grid').innerHTML = prods.length === 0 
-            ? '<p style="color:var(--dim);text-align:center;padding:20px;">Ничего не найдено</p>' 
-            : prods.map(p => renderCard(p)).join('');
+        const gridElement = $('grid');
+        if (gridElement) {
+            gridElement.innerHTML = prods.length === 0 
+                ? '<p style="color:var(--dim);text-align:center;padding:20px;">Ничего не найдено</p>' 
+                : prods.map(p => renderCard(p)).join('');
+        }
     } catch (err) {
+        console.error('❌ Ошибка загрузки товаров:', err);
         toast('Ошибка загрузки товаров');
     }
 }
@@ -1193,9 +1292,12 @@ async function loadFavs() {
         const favs = await fetch('/api/favorites/' + user.username).then(r => r.json());
         favIds = favs.map(f => f.id);
         
-        $('favs-grid').innerHTML = favs.length === 0 
-            ? '<p style="color:var(--dim);text-align:center;padding:20px;">В избранном ничего нет</p>' 
-            : favs.map(p => renderCard(p)).join('');
+        const favsGrid = $('favs-grid');
+        if (favsGrid) {
+            favsGrid.innerHTML = favs.length === 0 
+                ? '<p style="color:var(--dim);text-align:center;padding:20px;">В избранном ничего нет</p>' 
+                : favs.map(p => renderCard(p)).join('');
+        }
     } catch (err) {
         toast('Ошибка загрузки избранного');
     }
@@ -1207,22 +1309,34 @@ async function loadProfile() {
         user = { ...user, ...data };
         updateUI();
 
-        $('p-avatar').src = data.avatar;
-        $('p-name').textContent = data.displayName;
-        $('p-bio').textContent = data.bio || 'О себе не указано';
-        $('s-products').textContent = data.stats.products;
-        $('s-sales').textContent = data.stats.sales;
-        $('s-earned').textContent = fmt(data.stats.earned);
-        $('e-name').value = data.displayName;
-        $('e-bio').value = data.bio || '';
+        const avatar = $('p-avatar');
+        const name = $('p-name');
+        const bio = $('p-bio');
+        const products = $('s-products');
+        const sales = $('s-sales');
+        const earned = $('s-earned');
+        const nameInput = $('e-name');
+        const bioInput = $('e-bio');
+        const owned = $('owned');
 
-        $('owned').innerHTML = data.ownedProducts.length === 0 
-            ? '<p style="color:var(--dim)">У вас пока нет покупок</p>' 
-            : data.ownedProducts.map(p => 
-                '<div class="mini-card"><h4>' + esc(p.title) + '</h4>' +
-                '<a href="/api/download/' + p.id + '?username=' + user.username + 
-                '" class="btn btn-main">Скачать</a></div>'
-            ).join('');
+        if (avatar) avatar.src = data.avatar;
+        if (name) name.textContent = data.displayName;
+        if (bio) bio.textContent = data.bio || 'О себе не указано';
+        if (products) products.textContent = data.stats.products;
+        if (sales) sales.textContent = data.stats.sales;
+        if (earned) earned.textContent = fmt(data.stats.earned);
+        if (nameInput) nameInput.value = data.displayName;
+        if (bioInput) bioInput.value = data.bio || '';
+
+        if (owned) {
+            owned.innerHTML = data.ownedProducts.length === 0 
+                ? '<p style="color:var(--dim)">У вас пока нет покупок</p>' 
+                : data.ownedProducts.map(p => 
+                    '<div class="mini-card"><h4>' + esc(p.title) + '</h4>' +
+                    '<a href="/api/download/' + p.id + '?username=' + user.username + 
+                    '" class="btn btn-main">Скачать</a></div>'
+                ).join('');
+        }
     } catch (err) {
         toast('Ошибка загрузки профиля');
     }
@@ -1230,13 +1344,16 @@ async function loadProfile() {
 
 async function saveProfile() {
     try {
+        const nameInput = $('e-name');
+        const bioInput = $('e-bio');
+        
         await fetch('/api/profile', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 username: user.username,
-                displayName: $('e-name').value,
-                bio: $('e-bio').value
+                displayName: nameInput?.value || '',
+                bio: bioInput?.value || ''
             })
         });
         
@@ -1252,16 +1369,22 @@ async function loadWallet() {
         const data = await fetch('/api/user/' + user.username).then(r => r.json());
         user.balance = data.balance;
         updateUI();
-        $('w-bal').textContent = fmt(data.balance);
+        
+        const walletBal = $('w-bal');
+        const txList = $('tx');
+        
+        if (walletBal) walletBal.textContent = fmt(data.balance);
 
-        $('tx').innerHTML = !data.transactions || data.transactions.length === 0 
-            ? '<p style="padding:16px;color:var(--dim);text-align:center;">Нет операций</p>' 
-            : data.transactions.map(t => 
-                '<div class="tx"><div><b>' + t.desc + '</b><br>' +
-                '<small>' + new Date(t.date).toLocaleString('ru-RU') + '</small></div>' +
-                '<span class="' + (t.amount > 0 ? 'tx-plus' : 'tx-minus') + '">' +
-                (t.amount > 0 ? '+' : '') + fmt(t.amount) + '</span></div>'
-            ).join('');
+        if (txList) {
+            txList.innerHTML = !data.transactions || data.transactions.length === 0 
+                ? '<p style="padding:16px;color:var(--dim);text-align:center;">Нет операций</p>' 
+                : data.transactions.map(t => 
+                    '<div class="tx"><div><b>' + t.desc + '</b><br>' +
+                    '<small>' + new Date(t.date).toLocaleString('ru-RU') + '</small></div>' +
+                    '<span class="' + (t.amount > 0 ? 'tx-plus' : 'tx-minus') + '">' +
+                    (t.amount > 0 ? '+' : '') + fmt(t.amount) + '</span></div>'
+                ).join('');
+        }
     } catch (err) {
         toast('Ошибка загрузки истории');
     }
@@ -1289,11 +1412,11 @@ async function topUp(amount) {
 }
 
 async function publish() {
-    const title = $('u-title').value.trim();
-    const price = $('u-price').value;
-    const desc = $('u-desc').value.trim();
-    const cat = $('u-cat').value;
-    const file = $('u-file').files[0];
+    const title = $('u-title')?.value?.trim();
+    const price = $('u-price')?.value;
+    const desc = $('u-desc')?.value?.trim();
+    const cat = $('u-cat')?.value;
+    const file = $('u-file')?.files[0];
     
     if (!title) return toast('Укажите название');
     if (!price) return toast('Укажите цену');
@@ -1326,8 +1449,6 @@ async function publish() {
         toast('Ошибка соединения');
     }
 }
-
-console.log('✅ CodeVault загружен');
 </script>
 </body>
 </html>`;
