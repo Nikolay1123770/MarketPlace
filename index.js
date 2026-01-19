@@ -7,10 +7,15 @@ const crypto = require('crypto');
 // ═══════════════════════════════════════════════════════════
 // КОНФИГУРАЦИЯ
 // ═══════════════════════════════════════════════════════════
-const BOT_TOKEN = process.env.BOT_TOKEN || '8035930401:AAH4bICwB8LVXApFEIaLmOlsYD9PyO5sylI';
-const PORT = process.env.PORT || 8080; // Изменил с 3000 на 8080
-const WEBHOOK_PATH = `/webhook/${BOT_TOKEN}`;
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const PORT = process.env.PORT || 3000;
+const WEBHOOK_PATH = BOT_TOKEN ? `/webhook/${BOT_TOKEN}` : '/webhook/disabled';
 const DOMAIN = process.env.DOMAIN || 'https://marketplacebot.bothost.ru';
+
+console.log('🔧 Конфигурация:');
+console.log(`📍 Порт: ${PORT}`);
+console.log(`🤖 Бот токен: ${BOT_TOKEN ? 'Установлен ✅' : 'Не установлен ❌'}`);
+console.log(`🌐 Домен: ${DOMAIN}`);
 
 const app = express();
 app.use(express.json());
@@ -41,12 +46,14 @@ function hashPassword(password) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// TELEGRAM BOT
+// TELEGRAM BOT (только если токен установлен)
 // ═══════════════════════════════════════════════════════════
-const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const TELEGRAM_API = BOT_TOKEN ? `https://api.telegram.org/bot${BOT_TOKEN}` : null;
 
 // Простая функция отправки сообщения
 async function sendMessage(chatId, text, options = {}) {
+    if (!TELEGRAM_API) return;
+    
     try {
         await fetch(`${TELEGRAM_API}/sendMessage`, {
             method: 'POST',
@@ -65,13 +72,13 @@ async function sendMessage(chatId, text, options = {}) {
 
 // Обработка вебхуков от Telegram
 app.post(WEBHOOK_PATH, async (req, res) => {
-    // Для стабильности сразу отправляем 200 OK
     res.sendStatus(200);
+    
+    if (!BOT_TOKEN) return;
     
     try {
         const update = req.body;
         
-        // Если это не сообщение, выходим
         if (!update.message) return;
         
         const message = update.message;
@@ -79,9 +86,7 @@ app.post(WEBHOOK_PATH, async (req, res) => {
         const text = message.text;
         const from = message.from;
         
-        // Обработка команды /start
         if (text === '/start') {
-            // Создаем клавиатуру с кнопками
             const keyboard = {
                 reply_markup: {
                     keyboard: [
@@ -92,7 +97,6 @@ app.post(WEBHOOK_PATH, async (req, res) => {
                 }
             };
             
-            // Отправляем приветственное сообщение с кнопками
             await sendMessage(chatId,
                 `👋 *Добро пожаловать, ${from.first_name}!*\n\n` +
                 `🛒 *CodeVault Marketplace*\n` +
@@ -102,9 +106,7 @@ app.post(WEBHOOK_PATH, async (req, res) => {
                 keyboard
             );
         }
-        // Обработка кнопок и текстовых команд
         else if (text === "💰 Баланс" || text === "/balance") {
-            // Ищем пользователя по Telegram ID
             const user = users.find(u => u.telegramId === from.id);
             
             if (user) {
@@ -148,7 +150,6 @@ app.post(WEBHOOK_PATH, async (req, res) => {
                 `Если у вас есть вопросы, обратитесь к администрации.`
             );
         }
-        // Если текст не распознан
         else {
             await sendMessage(chatId,
                 `🤔 Извините, я не понимаю эту команду.\n` +
@@ -164,23 +165,23 @@ app.post(WEBHOOK_PATH, async (req, res) => {
 // API: РЕГИСТРАЦИЯ И АВТОРИЗАЦИЯ
 // ═══════════════════════════════════════════════════════════
 
-// Регистрация пользователя - простая, без подтверждения через Telegram
 app.post('/api/register', (req, res) => {
+    console.log('📝 Попытка регистрации:', req.body);
+    
     const { username, password } = req.body;
     
-    // Проверка данных
     if (!username || !password || username.length < 3 || password.length < 6) {
+        console.log('❌ Неверные данные регистрации');
         return res.status(400).json({ 
             error: 'Имя пользователя должно содержать минимум 3 символа, пароль - минимум 6 символов' 
         });
     }
     
-    // Проверяем, что пользователь не существует
     if (users.find(u => u.username.toLowerCase() === username.toLowerCase())) {
+        console.log('❌ Пользователь уже существует');
         return res.status(400).json({ error: 'Пользователь с таким именем уже существует' });
     }
     
-    // Создаем пользователя сразу
     const user = {
         id: Date.now().toString(),
         username: username,
@@ -198,7 +199,6 @@ app.post('/api/register', (req, res) => {
     
     users.push(user);
     
-    // Создаем транзакцию бонуса
     transactions.push({
         id: Date.now().toString(),
         userId: user.id,
@@ -208,38 +208,39 @@ app.post('/api/register', (req, res) => {
         date: new Date().toISOString()
     });
     
-    // Не отправляем пароль обратно
+    console.log('✅ Пользователь зарегистрирован:', username);
+    
     const { password: _, ...userData } = user;
     res.json({ success: true, user: userData });
 });
 
-// Вход через логин/пароль
 app.post('/api/login', (req, res) => {
+    console.log('🔑 Попытка входа:', { username: req.body.username });
+    
     const { username, password } = req.body;
     
-    // Проверяем данные
     if (!username || !password) {
         return res.status(400).json({ error: 'Введите логин и пароль' });
     }
     
-    // Ищем пользователя
     const user = users.find(u => u.username.toLowerCase() === username.toLowerCase());
     
     if (!user) {
+        console.log('❌ Пользователь не найден:', username);
         return res.status(401).json({ error: 'Пользователь не найден' });
     }
     
-    // Проверяем пароль
     if (user.password !== hashPassword(password)) {
+        console.log('❌ Неверный пароль для:', username);
         return res.status(401).json({ error: 'Неверный пароль' });
     }
     
-    // Не отправляем пароль обратно
+    console.log('✅ Успешный вход:', username);
+    
     const { password: _, ...userData } = user;
     res.json(userData);
 });
 
-// Привязка Telegram аккаунта
 app.post('/api/link-telegram', (req, res) => {
     const { username, telegramId } = req.body;
     const user = users.find(u => u.username === username);
@@ -265,7 +266,6 @@ app.get('/api/user/:username', (req, res) => {
     const tx = transactions.filter(t => t.userId === user.id).reverse().slice(0, 30);
     const favs = favorites.filter(f => f.userId === user.id).map(f => products.find(p => p.id === f.productId)).filter(Boolean);
 
-    // Не отправляем пароль обратно
     const { password: _, ...userData } = user;
 
     res.json({
@@ -283,7 +283,6 @@ app.get('/api/user/:username', (req, res) => {
     });
 });
 
-// === ОСТАЛЬНЫЕ API-МЕТОДЫ ===
 app.get('/api/products', (req, res) => {
     const { category, search, sort } = req.query;
     let result = [...products];
@@ -452,6 +451,16 @@ app.post('/api/profile', (req, res) => {
     res.json({ success: true });
 });
 
+// Тестовый маршрут для отладки
+app.get('/api/test', (req, res) => {
+    res.json({ 
+        status: 'OK', 
+        users: users.length, 
+        products: products.length,
+        botEnabled: !!BOT_TOKEN 
+    });
+});
+
 // ═══════════════════════════════════════════════════════════
 // HTML СТРАНИЦА
 // ═══════════════════════════════════════════════════════════
@@ -520,6 +529,7 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
     padding: 12px 20px;
     border-radius: 8px;
     font-weight: 600;
+    cursor: pointer;
 }
 .btn-main {
     background: var(--accent);
@@ -529,11 +539,16 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
 .btn-main:hover {
     opacity: 0.9;
 }
+.btn-main:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
 .btn-link {
     color: var(--accent);
     text-decoration: none;
     margin-top: 16px;
     display: inline-block;
+    cursor: pointer;
 }
 
 /* APP LAYOUT */
@@ -746,28 +761,36 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
 </div>
 
 <script>
+console.log('🚀 CodeVault загружается...');
+
 let user=null,favIds=[];
 const $=id=>document.getElementById(id);
-const toast=m=>{const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2500)};
+const toast=m=>{console.log('📢 Toast:',m);const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2500)};
 const fmt=n=>new Intl.NumberFormat('ru-RU').format(n)+'₽';
 const esc=s=>{const d=document.createElement('div');d.textContent=s;return d.innerHTML};
 
 // ПЕРЕКЛЮЧЕНИЕ ЭКРАНОВ
 function showLogin() {
+    console.log('🔄 Показ экрана входа');
     $('register-screen').classList.add('hidden');
     $('auth').classList.remove('hidden');
 }
 
 function showRegister() {
+    console.log('🔄 Показ экрана регистрации');
     $('auth').classList.add('hidden');
     $('register-screen').classList.remove('hidden');
 }
 
 // РЕГИСТРАЦИЯ И ВХОД
 async function register() {
+    console.log('📝 Начало регистрации');
+    
     const username = $('reg-username').value.trim();
     const password = $('reg-password').value;
     const password2 = $('reg-password2').value;
+    
+    console.log('📝 Данные регистрации:', { username, passwordLength: password?.length });
     
     if (!username || username.length < 3) {
         return toast('Имя пользователя должно быть минимум 3 символа');
@@ -779,16 +802,28 @@ async function register() {
         return toast('Пароли не совпадают');
     }
     
+    // Отключаем кнопку
+    const btn = event.target;
+    btn.disabled = true;
+    btn.textContent = 'Регистрация...';
+    
     try {
+        console.log('📡 Отправка запроса регистрации');
+        
         const res = await fetch('/api/register', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password })
         });
         
+        console.log('📡 Ответ регистрации:', res.status);
+        
         const data = await res.json();
+        console.log('📡 Данные ответа:', data);
         
         if (!res.ok) {
+            btn.disabled = false;
+            btn.textContent = 'Зарегистрироваться';
             return toast(data.error || 'Ошибка при регистрации');
         }
         
@@ -797,11 +832,16 @@ async function register() {
         onLogin();
         toast('Регистрация успешна!');
     } catch (err) {
+        console.error('❌ Ошибка регистрации:', err);
+        btn.disabled = false;
+        btn.textContent = 'Зарегистрироваться';
         toast('Ошибка соединения');
     }
 }
 
 async function login() {
+    console.log('🔑 Начало входа');
+    
     const username = $('login-name').value.trim();
     const password = $('login-password').value;
     
@@ -810,11 +850,15 @@ async function login() {
     }
     
     try {
+        console.log('📡 Отправка запроса входа');
+        
         const res = await fetch('/api/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password })
         });
+        
+        console.log('📡 Ответ входа:', res.status);
         
         if (!res.ok) {
             const data = await res.json();
@@ -822,14 +866,17 @@ async function login() {
         }
         
         user = await res.json();
+        console.log('✅ Успешный вход:', user.username);
         onLogin();
     } catch (err) {
+        console.error('❌ Ошибка входа:', err);
         toast('Ошибка соединения');
     }
 }
 
 // После успешного входа
 function onLogin() {
+    console.log('🎉 Пользователь вошел в систему');
     $('auth').classList.add('hidden');
     $('register-screen').classList.add('hidden');
     $('app').classList.remove('hidden');
@@ -867,6 +914,8 @@ document.querySelectorAll('.nav a').forEach(a => {
 
 // Загрузка товаров
 async function loadMarket() {
+    if (!user) return;
+    
     const search = $('f-search').value;
     const cat = $('f-cat').value;
     const sort = $('f-sort').value;
@@ -887,6 +936,7 @@ async function loadMarket() {
             ? '<p style="color:var(--dim);text-align:center;padding:20px;">Ничего не найдено</p>' 
             : prods.map(p => renderCard(p)).join('');
     } catch (err) {
+        console.error('❌ Ошибка загрузки товаров:', err);
         toast('Ошибка загрузки товаров');
     }
 }
@@ -1102,6 +1152,8 @@ async function publish() {
         toast('Ошибка соединения');
     }
 }
+
+console.log('✅ CodeVault загружен');
 </script>
 </body>
 </html>`;
@@ -1109,13 +1161,13 @@ async function publish() {
 app.get('/', (req, res) => res.send(HTML));
 
 // ═══════════════════════════════════════════════════════════
-// ЗАПУСК С ОБРАБОТКОЙ ОШИБОК
+// ЗАПУСК
 // ═══════════════════════════════════════════════════════════
-const server = app.listen(PORT, async () => {
+app.listen(PORT, async () => {
     console.log(`✅ CodeVault запущен на порту ${PORT}`);
     
-    // Устанавливаем вебхук для бота
-    if (BOT_TOKEN && BOT_TOKEN !== '8035930401:AAH4bICwB8LVXApFEIaLmOlsYD9PyO5sylI') {
+    // Устанавливаем вебхук для бота только если токен есть
+    if (BOT_TOKEN) {
         const webhookUrl = `${DOMAIN}${WEBHOOK_PATH}`;
         console.log(`🔄 Настройка вебхука: ${webhookUrl}`);
         
@@ -1132,39 +1184,7 @@ const server = app.listen(PORT, async () => {
             console.error('❌ Ошибка запроса webhook:', error.message);
         }
     } else {
-        console.warn('⚠️ Бот выключен (не указан токен)');
+        console.warn('⚠️ Бот выключен (переменная BOT_TOKEN не установлена)');
+        console.log('💡 Для включения бота добавьте переменную окружения BOT_TOKEN в настройках');
     }
-});
-
-// Обработка ошибок сервера
-server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-        console.error(`❌ Порт ${PORT} уже используется!`);
-        console.log('🔄 Попытка использовать случайный порт...');
-        
-        // Пробуем использовать случайный порт
-        const randomPort = Math.floor(Math.random() * 10000) + 10000;
-        app.listen(randomPort, () => {
-            console.log(`✅ Сервер запущен на резервном порту ${randomPort}`);
-        });
-    } else {
-        console.error('❌ Ошибка запуска сервера:', err);
-    }
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-    console.log('🔄 Получен сигнал SIGTERM, завершение работы...');
-    server.close(() => {
-        console.log('✅ Сервер остановлен');
-        process.exit(0);
-    });
-});
-
-process.on('SIGINT', () => {
-    console.log('🔄 Получен сигнал SIGINT, завершение работы...');
-    server.close(() => {
-        console.log('✅ Сервер остановлен');
-        process.exit(0);
-    });
 });
