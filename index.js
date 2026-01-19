@@ -2,20 +2,14 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
 
 // ═══════════════════════════════════════════════════════════
 // КОНФИГУРАЦИЯ
 // ═══════════════════════════════════════════════════════════
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const PORT = process.env.PORT || 7777;
-const WEBHOOK_PATH = BOT_TOKEN ? `/webhook/${BOT_TOKEN}` : '/webhook/disabled';
+const BOT_TOKEN = process.env.BOT_TOKEN || '8035930401:AAH4bICwB8LVXApFEIaLmOlsYD9PyO5sylI';
+const PORT = process.env.PORT || 3000;
+const WEBHOOK_PATH = `/webhook/${BOT_TOKEN}`;
 const DOMAIN = process.env.DOMAIN || 'https://marketplacebot.bothost.ru';
-
-console.log('🔧 Конфигурация:');
-console.log(`📍 Порт: ${PORT}`);
-console.log(`🤖 Бот токен: ${BOT_TOKEN ? 'Установлен ✅' : 'Не установлен ❌'}`);
-console.log(`🌐 Домен: ${DOMAIN}`);
 
 const app = express();
 app.use(express.json());
@@ -39,29 +33,16 @@ let users = [];
 let products = [];
 let transactions = [];
 let favorites = [];
-let registrationCodes = [];
-
-// Хеширование пароля
-function hashPassword(password) {
-    return crypto.createHash('sha256').update(password).digest('hex');
-}
-
-// Генерация кода регистрации
-function generateRegCode() {
-    return Math.random().toString(36).substring(2, 8).toUpperCase();
-}
+const authCodes = new Map();
 
 // ═══════════════════════════════════════════════════════════
-// TELEGRAM BOT
+// TELEGRAM WEBHOOK
 // ═══════════════════════════════════════════════════════════
-const TELEGRAM_API = BOT_TOKEN ? `https://api.telegram.org/bot${BOT_TOKEN}` : null;
+const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-// Простая функция отправки сообщения
 async function sendMessage(chatId, text, options = {}) {
-    if (!TELEGRAM_API) return;
-    
     try {
-        const response = await fetch(`${TELEGRAM_API}/sendMessage`, {
+        await fetch(`${TELEGRAM_API}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -71,213 +52,106 @@ async function sendMessage(chatId, text, options = {}) {
                 ...options
             })
         });
-        
-        if (!response.ok) {
-            console.error('❌ Telegram API error:', response.status);
-        }
     } catch (e) {
-        console.error('❌ Telegram error:', e.message);
+        console.error('Telegram error:', e.message);
     }
 }
 
-// Обработка вебхуков от Telegram
-app.post(WEBHOOK_PATH, async (req, res) => {
-    res.sendStatus(200);
-    
-    if (!BOT_TOKEN) return;
-    
-    try {
-        const update = req.body;
-        console.log('📨 Получено обновление от Telegram');
-        
-        if (!update.message) return;
-        
-        const message = update.message;
-        const chatId = message.chat.id;
-        const text = message.text;
-        const from = message.from;
-        
-        if (text === '/start') {
-            const keyboard = {
-                reply_markup: {
-                    keyboard: [
-                        [{ text: "💰 Баланс" }, { text: "🛒 Открыть сайт" }],
-                        [{ text: "📝 Регистрация" }, { text: "❓ Помощь" }]
-                    ],
-                    resize_keyboard: true
-                }
-            };
-            
-            await sendMessage(chatId,
-                `👋 *Добро пожаловать, ${from.first_name}!*\n\n` +
-                `🛒 *CodeVault Marketplace*\n` +
-                `Магазин цифровых товаров и ботов\n\n` +
-                `🔹 Для регистрации получите код и зарегистрируйтесь на сайте\n` +
-                `🔹 Используйте кнопки внизу для навигации\n\n` +
-                `🌐 Сайт: ${DOMAIN}`,
-                keyboard
-            );
-        }
-        else if (text === "📝 Регистрация" || text === "/register") {
-            const existingUser = users.find(u => u.telegramId === from.id);
-            
-            if (existingUser) {
-                await sendMessage(chatId,
-                    `✅ *У вас уже есть аккаунт!*\n\n` +
-                    `👤 *Пользователь:* ${existingUser.displayName}\n` +
-                    `💰 *Баланс:* ${existingUser.balance} ₽\n\n` +
-                    `Вы можете войти на сайт используя ваши данные.`
-                );
-                return;
-            }
-            
-            let existingCode = registrationCodes.find(c => c.telegramId === from.id && c.expiresAt > Date.now());
-            
-            if (!existingCode) {
-                const code = generateRegCode();
-                existingCode = {
-                    code: code,
-                    telegramId: from.id,
-                    username: from.username || from.first_name,
-                    createdAt: Date.now(),
-                    expiresAt: Date.now() + (15 * 60 * 1000)
-                };
-                
-                registrationCodes.push(existingCode);
-                console.log(`🔐 Создан код регистрации: ${code} для @${from.username || from.first_name}`);
-            }
-            
-            const expiresIn = Math.ceil((existingCode.expiresAt - Date.now()) / (60 * 1000));
-            
-            await sendMessage(chatId,
-                `🔐 *Код для регистрации*\n\n` +
-                `\`${existingCode.code}\` _(нажмите для копирования)_\n\n` +
-                `📋 *Инструкция:*\n` +
-                `1️⃣ Перейдите на сайт по ссылке ниже\n` +
-                `2️⃣ Нажмите "Зарегистрироваться"\n` +
-                `3️⃣ Введите код в поле "Код Telegram"\n` +
-                `4️⃣ Заполните остальные данные\n\n` +
-                `⏰ *Код действует:* ${expiresIn} мин.\n\n` +
-                `После регистрации ваш Telegram будет автоматически привязан к аккаунту!`,
-                {
-                    reply_markup: {
-                        inline_keyboard: [[
-                            { text: "🌐 Перейти на сайт", url: DOMAIN }
-                        ]]
-                    }
-                }
-            );
-        }
-        else if (text === "💰 Баланс" || text === "/balance") {
-            const user = users.find(u => u.telegramId === from.id);
-            
-            if (user) {
-                await sendMessage(chatId,
-                    `💰 *Ваш баланс:* ${user.balance} ₽\n\n` +
-                    `📊 *Статистика:*\n` +
-                    `📦 Мои товары: ${user.myProducts.length}\n` +
-                    `🛒 Покупки: ${user.inventory.length}\n\n` +
-                    `👉 Для пополнения баланса перейдите на сайт в раздел Кошелёк`
-                );
-            } else {
-                await sendMessage(chatId,
-                    `❌ *Аккаунт не найден*\n\n` +
-                    `Похоже, вы еще не зарегистрированы на нашем сайте.\n` +
-                    `Используйте кнопку "📝 Регистрация" для получения кода.`
-                );
-            }
-        }
-        else if (text === "🛒 Открыть сайт" || text === "/site") {
-            await sendMessage(chatId,
-                `🌐 *Наш магазин ждет вас!*\n\n` +
-                `Нажмите на кнопку ниже, чтобы открыть CodeVault Marketplace:`,
-                {
-                    reply_markup: {
-                        inline_keyboard: [[
-                            { text: "🛒 Перейти в магазин", url: DOMAIN }
-                        ]]
-                    }
-                }
-            );
-        }
-        else if (text === "❓ Помощь" || text === "/help") {
-            await sendMessage(chatId,
-                `📚 *Помощь и информация*\n\n` +
-                `*Команды:*\n` +
-                `• 📝 Регистрация — получить код для регистрации\n` +
-                `• 💰 Баланс — проверка средств\n` +
-                `• 🛒 Открыть сайт — перейти в магазин\n` +
-                `• ❓ Помощь — эта информация\n\n` +
-                `*О магазине:*\n` +
-                `CodeVault — магазин цифровых товаров, где вы можете покупать и продавать боты, скрипты, сайты и другие цифровые продукты.\n\n` +
-                `*Как начать:*\n` +
-                `1. Получите код регистрации в боте\n` +
-                `2. Зарегистрируйтесь на сайте с кодом\n` +
-                `3. Начните покупать или продавать товары!\n\n` +
-                `Если у вас есть вопросы, обратитесь к администрации.`
-            );
-        }
-        else {
-            await sendMessage(chatId,
-                `🤔 Извините, я не понимаю эту команду.\n\n` +
-                `Доступные команды:\n` +
-                `• 📝 Регистрация — получить код\n` +
-                `• 💰 Баланс — проверить счёт\n` +
-                `• 🛒 Открыть сайт — перейти в магазин\n` +
-                `• ❓ Помощь — подробная информация\n\n` +
-                `Или воспользуйтесь кнопками меню.`
-            );
-        }
-    } catch (error) {
-        console.error('❌ Error handling update:', error);
+app.post(WEBHOOK_PATH, (req, res) => {
+    const { message } = req.body;
+    if (!message || !message.text) return res.sendStatus(200);
+
+    const chatId = message.chat.id;
+    const text = message.text;
+    const from = message.from;
+
+    if (text === '/start') {
+        sendMessage(chatId,
+            `👋 Привет, *${from.first_name}*!\n\n` +
+            `🛒 *CodeVault Marketplace*\n\n` +
+            `Команды:\n` +
+            `/login — Код для входа\n` +
+            `/balance — Баланс\n` +
+            `/site — Открыть сайт\n\n` +
+            `🌐 ${DOMAIN}`
+        );
     }
+    else if (text === '/login') {
+        const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+        
+        authCodes.set(code, {
+            telegramId: from.id,
+            username: from.username || `user_${from.id}`,
+            firstName: from.first_name,
+            createdAt: Date.now()
+        });
+
+        setTimeout(() => authCodes.delete(code), 5 * 60 * 1000);
+
+        sendMessage(chatId,
+            `🔐 *Код для входа:*\n\n\`${code}\`\n\n⏱ Действует 5 минут\n\n🌐 ${DOMAIN}`
+        );
+    }
+    else if (text === '/balance') {
+        const user = users.find(u => u.telegramId === from.id);
+        if (user) {
+            sendMessage(chatId,
+                `💰 *Баланс:* ${user.balance} ₽\n📦 Товаров: ${user.myProducts.length}\n🛒 Покупок: ${user.inventory.length}`
+            );
+        } else {
+            sendMessage(chatId, `❌ Вы не зарегистрированы\n\nИспользуйте /login`);
+        }
+    }
+    else if (text === '/site') {
+        sendMessage(chatId, `🌐 *CodeVault*\n\n${DOMAIN}`, {
+            reply_markup: { inline_keyboard: [[{ text: '🛒 Открыть', url: DOMAIN }]] }
+        });
+    }
+    else if (text === '/help') {
+        sendMessage(chatId,
+            `📚 *Команды:*\n\n/login — Код входа\n/balance — Баланс\n/site — Сайт\n/help — Справка`
+        );
+    }
+
+    res.sendStatus(200);
 });
 
 // ═══════════════════════════════════════════════════════════
-// API: РЕГИСТРАЦИЯ И АВТОРИЗАЦИЯ
+// API
 // ═══════════════════════════════════════════════════════════
 
-app.post('/api/register', (req, res) => {
-    console.log('📝 Попытка регистрации:', req.body);
+app.post('/api/auth/telegram', (req, res) => {
+    const { code } = req.body;
+    if (!code) return res.status(400).json({ error: 'Код не указан' });
     
-    const { username, password, telegramCode } = req.body;
+    const auth = authCodes.get(code.toUpperCase());
+    if (!auth) return res.status(401).json({ error: 'Неверный код' });
     
-    if (!username || !password || username.length < 3 || password.length < 6) {
-        console.log('❌ Неверные данные регистрации');
-        return res.status(400).json({ 
-            error: 'Имя пользователя должно содержать минимум 3 символа, пароль - минимум 6 символов' 
-        });
+    authCodes.delete(code.toUpperCase());
+    
+    let user = users.find(u => u.telegramId === auth.telegramId);
+    if (!user) {
+        user = createUser(auth.username, auth.telegramId, auth.firstName);
+        sendMessage(auth.telegramId, `✅ Вы вошли!\n💰 Баланс: ${user.balance} ₽`);
     }
+    res.json(user);
+});
+
+app.post('/api/auth', (req, res) => {
+    const { username } = req.body;
+    if (!username || !username.trim()) return res.status(400).json({ error: 'Нужен username' });
     
-    if (users.find(u => u.username.toLowerCase() === username.toLowerCase())) {
-        console.log('❌ Пользователь уже существует');
-        return res.status(400).json({ error: 'Пользователь с таким именем уже существует' });
-    }
-    
-    let telegramId = null;
-    
-    if (telegramCode) {
-        const codeData = registrationCodes.find(c => 
-            c.code === telegramCode.toUpperCase() && 
-            c.expiresAt > Date.now()
-        );
-        
-        if (!codeData) {
-            console.log('❌ Неверный или истекший код Telegram');
-            return res.status(400).json({ error: 'Неверный или истекший код Telegram' });
-        }
-        
-        telegramId = codeData.telegramId;
-        registrationCodes = registrationCodes.filter(c => c.code !== telegramCode.toUpperCase());
-        console.log(`✅ Код Telegram использован: ${telegramCode}`);
-    }
-    
+    let user = users.find(u => u.username.toLowerCase() === username.toLowerCase().trim());
+    if (!user) user = createUser(username.trim(), null, username.trim());
+    res.json(user);
+});
+
+function createUser(username, telegramId, displayName) {
     const user = {
         id: Date.now().toString(),
-        username: username,
-        displayName: username,
-        password: hashPassword(password),
         telegramId: telegramId,
+        username: username,
+        displayName: displayName || username,
         bio: 'Новый участник',
         avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`,
         balance: 5000,
@@ -286,7 +160,6 @@ app.post('/api/register', (req, res) => {
         inventory: [],
         myProducts: []
     };
-    
     users.push(user);
     
     transactions.push({
@@ -294,94 +167,12 @@ app.post('/api/register', (req, res) => {
         userId: user.id,
         type: 'bonus',
         amount: 5000,
-        desc: '🎁 Бонус за регистрацию',
+        desc: '🎁 Приветственный бонус',
         date: new Date().toISOString()
     });
     
-    console.log('✅ Пользователь зарегистрирован:', username);
-    
-    if (telegramId) {
-        sendMessage(telegramId,
-            `🎉 *Регистрация успешна!*\n\n` +
-            `👤 *Аккаунт:* ${username}\n` +
-            `💰 *Стартовый баланс:* 5000 ₽\n\n` +
-            `Ваш Telegram аккаунт успешно привязан к профилю!\n` +
-            `Теперь вы будете получать уведомления о продажах.`
-        );
-    }
-    
-    const { password: _, ...userData } = user;
-    res.json({ success: true, user: userData });
-});
-
-app.post('/api/login', (req, res) => {
-    console.log('🔑 Попытка входа:', req.body.username);
-    
-    const { username, password } = req.body;
-    
-    if (!username || !password) {
-        return res.status(400).json({ error: 'Введите логин и пароль' });
-    }
-    
-    const user = users.find(u => u.username.toLowerCase() === username.toLowerCase());
-    
-    if (!user) {
-        console.log('❌ Пользователь не найден:', username);
-        return res.status(401).json({ error: 'Пользователь не найден' });
-    }
-    
-    if (user.password !== hashPassword(password)) {
-        console.log('❌ Неверный пароль для:', username);
-        return res.status(401).json({ error: 'Неверный пароль' });
-    }
-    
-    console.log('✅ Успешный вход:', username);
-    
-    const { password: _, ...userData } = user;
-    res.json(userData);
-});
-
-app.post('/api/link-telegram', (req, res) => {
-    const { username, telegramId } = req.body;
-    const user = users.find(u => u.username === username);
-    
-    if (!user) {
-        return res.status(404).json({ error: 'Пользователь не найден' });
-    }
-    
-    user.telegramId = telegramId;
-    console.log(`✅ Telegram связан: ${username} -> ${telegramId}`);
-    res.json({ success: true });
-});
-
-app.post('/api/check-telegram-code', (req, res) => {
-    const { code } = req.body;
-    
-    if (!code) {
-        return res.status(400).json({ error: 'Код не указан' });
-    }
-    
-    const codeData = registrationCodes.find(c => 
-        c.code === code.toUpperCase() && 
-        c.expiresAt > Date.now()
-    );
-    
-    if (!codeData) {
-        return res.status(404).json({ error: 'Код не найден или истёк' });
-    }
-    
-    const expiresIn = Math.ceil((codeData.expiresAt - Date.now()) / (60 * 1000));
-    
-    res.json({ 
-        valid: true, 
-        username: codeData.username,
-        expiresIn: expiresIn 
-    });
-});
-
-// ═══════════════════════════════════════════════════════════
-// ОСТАЛЬНЫЕ API (без изменений)
-// ═══════════════════════════════════════════════════════════
+    return user;
+}
 
 app.get('/api/user/:username', (req, res) => {
     const user = users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
@@ -392,10 +183,8 @@ app.get('/api/user/:username', (req, res) => {
     const tx = transactions.filter(t => t.userId === user.id).reverse().slice(0, 30);
     const favs = favorites.filter(f => f.userId === user.id).map(f => products.find(p => p.id === f.productId)).filter(Boolean);
 
-    const { password: _, ...userData } = user;
-
     res.json({
-        ...userData,
+        ...user,
         ownedProducts: owned,
         soldProducts: sold,
         favorites: favs,
@@ -462,7 +251,6 @@ app.post('/api/publish', upload.single('file'), (req, res) => {
     
     products.push(product);
     user.myProducts.push(product.id);
-    console.log(`✅ Товар опубликован: ${title} (${username})`);
     res.json({ success: true });
 });
 
@@ -510,7 +298,6 @@ app.post('/api/buy', (req, res) => {
         date: new Date().toISOString()
     });
 
-    console.log(`✅ Покупка: ${product.title} (${username})`);
     res.json({ success: true, balance: user.balance });
 });
 
@@ -552,7 +339,6 @@ app.post('/api/topup', (req, res) => {
         date: new Date().toISOString()
     });
 
-    console.log(`✅ Пополнение: ${sum}₽ (${username})`);
     res.json({ success: true, balance: user.balance });
 });
 
@@ -577,23 +363,11 @@ app.post('/api/profile', (req, res) => {
 
     if (displayName) user.displayName = displayName;
     if (bio !== undefined) user.bio = bio;
-    console.log(`✅ Профиль обновлен: ${username}`);
     res.json({ success: true });
 });
 
-app.get('/api/test', (req, res) => {
-    res.json({ 
-        status: 'OK', 
-        users: users.length, 
-        products: products.length,
-        botEnabled: !!BOT_TOKEN,
-        port: PORT,
-        activeCodes: registrationCodes.filter(c => c.expiresAt > Date.now()).length
-    });
-});
-
 // ═══════════════════════════════════════════════════════════
-// HTML СТРАНИЦА (ПОЛНОСТЬЮ ИСПРАВЛЕННАЯ)
+// HTML
 // ═══════════════════════════════════════════════════════════
 const HTML = `<!DOCTYPE html>
 <html lang="ru">
@@ -614,90 +388,23 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(100px);background:var(--card);border:1px solid var(--accent);padding:12px 24px;border-radius:8px;opacity:0;transition:.3s;z-index:999}
 .toast.show{transform:translateX(-50%) translateY(0);opacity:1}
 
-#auth, #register-screen {
-    position: fixed;
-    inset: 0;
-    background: var(--bg);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-    z-index: 100;
-}
-.auth-box {
-    width: 100%;
-    max-width: 360px;
-    background: var(--card);
-    padding: 30px;
-    border-radius: 12px;
-    text-align: center;
-}
-.auth-box h1 {
-    font-size: 2rem;
-    color: var(--accent);
-    margin-bottom: 8px;
-}
-.auth-box p {
-    color: var(--dim);
-    margin-bottom: 24px;
-}
-.input-label {
-    display: block;
-    text-align: left;
-    margin-bottom: 6px;
-    color: var(--text);
-}
-.input-hint {
-    display: block;
-    text-align: left;
-    font-size: 12px;
-    color: var(--dim);
-    margin-top: 4px;
-    margin-bottom: 12px;
-}
-.btn {
-    padding: 12px 20px;
-    border-radius: 8px;
-    font-weight: 600;
-    cursor: pointer;
-}
-.btn-main {
-    background: var(--accent);
-    color: white;
-    width: 100%;
-}
-.btn-main:hover {
-    opacity: 0.9;
-}
-.btn-main:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-.btn-link {
-    color: var(--accent);
-    text-decoration: none;
-    margin-top: 16px;
-    display: inline-block;
-    cursor: pointer;
-}
-
-.telegram-section {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    padding: 16px;
-    border-radius: 8px;
-    margin-bottom: 16px;
-    text-align: left;
-}
-.telegram-section h4 {
-    color: var(--accent);
-    margin-bottom: 8px;
-}
-.telegram-section p {
-    color: var(--dim);
-    font-size: 13px;
-    margin-bottom: 12px;
-}
+#auth{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px;z-index:100}
+.auth-box{width:100%;max-width:360px;text-align:center}
+.auth-box h1{font-size:2rem;color:var(--accent);margin-bottom:8px}
+.auth-box>p{color:var(--dim);margin-bottom:24px}
+.tabs{display:flex;gap:8px;margin-bottom:16px}
+.tabs button{flex:1;padding:10px;background:var(--card);color:var(--dim);border-radius:8px}
+.tabs button.active{background:var(--accent);color:#fff}
+.auth-panel{display:none}
+.auth-panel.active{display:block}
+.steps{text-align:left;margin-bottom:16px}
+.step{display:flex;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);font-size:14px}
+.step b{color:var(--accent)}
+.step a{color:var(--accent)}
+#tg-code{text-align:center;font-size:1.5rem;letter-spacing:6px;text-transform:uppercase}
+.btn{padding:12px 20px;border-radius:8px;font-weight:600}
+.btn-main{background:var(--accent);color:#fff;width:100%}
+.btn-main:hover{opacity:.9}
 
 .app{display:flex;flex-direction:column;min-height:100vh}
 .header{background:var(--card);padding:16px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:50}
@@ -771,683 +478,292 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
 
 <div class="toast" id="toast"></div>
 
-<!-- ЛОГИН -->
 <div id="auth">
-    <div class="auth-box">
-        <h1>CodeVault</h1>
-        <p>Маркетплейс цифровых товаров</p>
-
-        <div class="input-group">
-            <label class="input-label">Логин</label>
-            <input type="text" id="login-name" placeholder="Введите имя пользователя">
-        </div>
-        
-        <div class="input-group">
-            <label class="input-label">Пароль</label>
-            <input type="password" id="login-password" placeholder="Введите пароль">
-        </div>
-        
-        <button class="btn btn-main" id="login-btn">Войти</button>
-        <p style="margin-top:20px">Нет аккаунта? <a href="#" class="btn-link" id="show-register-btn">Зарегистрироваться</a></p>
-    </div>
+<div class="auth-box">
+<h1>CodeVault</h1>
+<p>Маркетплейс цифровых товаров</p>
+<div class="tabs">
+<button class="active" onclick="switchAuth('tg', this)">Telegram</button>
+<button onclick="switchAuth('login', this)">Логин</button>
+</div>
+<div id="auth-tg" class="auth-panel active">
+<div class="steps">
+<div class="step"><b>1.</b> Открой бота в Telegram</div>
+<div class="step"><b>2.</b> Отправь /login</div>
+<div class="step"><b>3.</b> Введи код ниже</div>
+</div>
+<input type="text" id="tg-code" placeholder="XXXXXX" maxlength="6">
+<button class="btn btn-main" onclick="loginTG()">Войти</button>
+</div>
+<div id="auth-login" class="auth-panel">
+<input type="text" id="login-name" placeholder="Ваш никнейм">
+<button class="btn btn-main" onclick="loginName()">Войти</button>
+</div>
+</div>
 </div>
 
-<!-- РЕГИСТРАЦИЯ -->
-<div id="register-screen" class="hidden">
-    <div class="auth-box">
-        <h1>Регистрация</h1>
-        <p>Создание нового аккаунта</p>
-        
-        <div class="telegram-section">
-            <h4>🤖 Интеграция с Telegram</h4>
-            <p>Получите код в нашем боте для автоматической привязки аккаунта</p>
-            <div class="input-group">
-                <label class="input-label">Код Telegram (необязательно)</label>
-                <input type="text" id="telegram-code" placeholder="Введите код из бота" style="text-transform: uppercase;">
-                <span class="input-hint">Напишите /register в боте для получения кода</span>
-            </div>
-        </div>
-        
-        <div class="input-group">
-            <label class="input-label">Имя пользователя</label>
-            <input type="text" id="reg-username" placeholder="Введите логин">
-            <span class="input-hint">Минимум 3 символа</span>
-        </div>
-        
-        <div class="input-group">
-            <label class="input-label">Пароль</label>
-            <input type="password" id="reg-password" placeholder="Введите пароль">
-            <span class="input-hint">Минимум 6 символов</span>
-        </div>
-        
-        <div class="input-group">
-            <label class="input-label">Подтверждение пароля</label>
-            <input type="password" id="reg-password2" placeholder="Повторите пароль">
-        </div>
-        
-        <button class="btn btn-main" id="register-btn">Зарегистрироваться</button>
-        <p style="margin-top:20px">Уже есть аккаунт? <a href="#" class="btn-link" id="show-login-btn">Войти</a></p>
-    </div>
-</div>
-
-<!-- MAIN APP -->
 <div id="app" class="app hidden">
-    <header class="header">
-        <h1>CodeVault</h1>
-        <div class="user">
-            <span id="h-balance">0₽</span>
-            <img id="h-avatar" src="">
-        </div>
-    </header>
+<header class="header">
+<h1>CodeVault</h1>
+<div class="user">
+<span id="h-balance">0₽</span>
+<img id="h-avatar" src="">
+</div>
+</header>
 
-    <div class="content">
-        <section id="tab-market" class="tab active">
-            <div class="filters">
-                <input type="text" id="f-search" placeholder="Поиск...">
-                <select id="f-cat"><option value="all">Все</option><option>BOT</option><option>WEB</option><option>SCRIPT</option></select>
-                <select id="f-sort"><option value="newest">Новые</option><option value="popular">Популярные</option><option value="price-low">Дешевле</option></select>
-            </div>
-            <div id="grid" class="grid"></div>
-        </section>
+<div class="content">
+<section id="tab-market" class="tab active">
+<div class="filters">
+<input type="text" id="f-search" placeholder="Поиск...">
+<select id="f-cat"><option value="all">Все</option><option>BOT</option><option>WEB</option><option>SCRIPT</option></select>
+<select id="f-sort"><option value="newest">Новые</option><option value="popular">Популярные</option><option value="price-low">Дешевле</option></select>
+</div>
+<div id="grid" class="grid"></div>
+</section>
 
-        <section id="tab-favs" class="tab">
-            <h2 style="margin-bottom:16px">Избранное</h2>
-            <div id="favs-grid" class="grid"></div>
-        </section>
+<section id="tab-favs" class="tab">
+<h2 style="margin-bottom:16px">Избранное</h2>
+<div id="favs-grid" class="grid"></div>
+</section>
 
-        <section id="tab-profile" class="tab">
-            <div class="profile-head">
-                <img id="p-avatar" src="">
-                <h2 id="p-name"></h2>
-                <p id="p-bio"></p>
-                <div class="stats">
-                    <div class="stat"><b id="s-products">0</b><span>Товаров</span></div>
-                    <div class="stat"><b id="s-sales">0</b><span>Продаж</span></div>
-                    <div class="stat"><b id="s-earned">0</b><span>Заработано</span></div>
-                </div>
-            </div>
-            <div class="section">
-                <h3>Редактировать</h3>
-                <input type="text" id="e-name" placeholder="Имя">
-                <textarea id="e-bio" rows="2" placeholder="О себе"></textarea>
-                <button class="btn btn-main" onclick="saveProfile()">Сохранить</button>
-            </div>
-            <div class="section">
-                <h3>Мои покупки</h3>
-                <div id="owned" class="mini-grid"></div>
-            </div>
-        </section>
+<section id="tab-profile" class="tab">
+<div class="profile-head">
+<img id="p-avatar" src="">
+<h2 id="p-name"></h2>
+<p id="p-bio"></p>
+<div class="stats">
+<div class="stat"><b id="s-products">0</b><span>Товаров</span></div>
+<div class="stat"><b id="s-sales">0</b><span>Продаж</span></div>
+<div class="stat"><b id="s-earned">0</b><span>Заработано</span></div>
+</div>
+</div>
+<div class="section">
+<h3>Редактировать</h3>
+<input type="text" id="e-name" placeholder="Имя">
+<textarea id="e-bio" rows="2" placeholder="О себе"></textarea>
+<button class="btn btn-main" onclick="saveProfile()">Сохранить</button>
+</div>
+<div class="section">
+<h3>Мои покупки</h3>
+<div id="owned" class="mini-grid"></div>
+</div>
+</section>
 
-        <section id="tab-wallet" class="tab">
-            <div class="wallet-card">
-                <small>Баланс</small>
-                <div class="amount" id="w-bal">0 ₽</div>
-                <div class="btns">
-                    <button class="btn" onclick="topUp(1000)">+1K</button>
-                    <button class="btn" onclick="topUp(5000)">+5K</button>
-                    <button class="btn" onclick="topUp(10000)">+10K</button>
-                </div>
-            </div>
-            <h3 style="margin-bottom:12px">История</h3>
-            <div class="tx-list" id="tx"></div>
-        </section>
+<section id="tab-wallet" class="tab">
+<div class="wallet-card">
+<small>Баланс</small>
+<div class="amount" id="w-bal">0 ₽</div>
+<div class="btns">
+<button class="btn" onclick="topUp(1000)">+1K</button>
+<button class="btn" onclick="topUp(5000)">+5K</button>
+<button class="btn" onclick="topUp(10000)">+10K</button>
+</div>
+</div>
+<h3 style="margin-bottom:12px">История</h3>
+<div class="tx-list" id="tx"></div>
+</section>
 
-        <section id="tab-upload" class="tab">
-            <div class="upload-box">
-                <h2>Новый товар</h2>
-                <input type="text" id="u-title" placeholder="Название">
-                <div class="row">
-                    <select id="u-cat"><option>BOT</option><option>WEB</option><option>SCRIPT</option><option>API</option></select>
-                    <input type="number" id="u-price" placeholder="Цена">
-                </div>
-                <textarea id="u-desc" rows="3" placeholder="Описание"></textarea>
-                <div class="file-area" onclick="document.getElementById('u-file').click()">📁 Выбрать файл</div>
-                <input type="file" id="u-file" hidden>
-                <button class="btn btn-main" onclick="publish()">Опубликовать</button>
-            </div>
-        </section>
-    </div>
+<section id="tab-upload" class="tab">
+<div class="upload-box">
+<h2>Новый товар</h2>
+<input type="text" id="u-title" placeholder="Название">
+<div class="row">
+<select id="u-cat"><option>BOT</option><option>WEB</option><option>SCRIPT</option><option>API</option></select>
+<input type="number" id="u-price" placeholder="Цена">
+</div>
+<textarea id="u-desc" rows="3" placeholder="Описание"></textarea>
+<div class="file-area" onclick="document.getElementById('u-file').click()">📁 Выбрать файл</div>
+<input type="file" id="u-file" hidden>
+<button class="btn btn-main" onclick="publish()">Опубликовать</button>
+</div>
+</section>
+</div>
 
-    <nav class="nav">
-        <a href="#" class="active" data-tab="market"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>Маркет</a>
-        <a href="#" data-tab="favs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>Избранное</a>
-        <a href="#" data-tab="profile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="7" r="4"/><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/></svg>Профиль</a>
-        <a href="#" data-tab="wallet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>Кошелёк</a>
-        <a href="#" data-tab="upload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Продать</a>
-    </nav>
+<nav class="nav">
+<a href="#" class="active" data-tab="market"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>Маркет</a>
+<a href="#" data-tab="favs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>Избранное</a>
+<a href="#" data-tab="profile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="7" r="4"/><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/></svg>Профиль</a>
+<a href="#" data-tab="wallet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>Кошелёк</a>
+<a href="#" data-tab="upload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Продать</a>
+</nav>
 </div>
 
 <script>
-// Глобальные переменные
-let user = null;
-let favIds = [];
+let user=null,favIds=[];
+const $=id=>document.getElementById(id);
+const toast=m=>{const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2500)};
+const fmt=n=>new Intl.NumberFormat('ru-RU').format(n)+'₽';
+const esc=s=>{const d=document.createElement('div');d.textContent=s;return d.innerHTML};
 
-// Утилиты
-const $ = id => document.getElementById(id);
-const toast = m => {
-    console.log('📢 Toast:', m);
-    const t = $('toast');
-    if (t) {
-        t.textContent = m;
-        t.classList.add('show');
-        setTimeout(() => t.classList.remove('show'), 2500);
-    }
-};
-const fmt = n => new Intl.NumberFormat('ru-RU').format(n) + '₽';
-const esc = s => {
-    const d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
-};
+function switchAuth(m, btn){
+document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('active'));
+btn.classList.add('active');
+document.querySelectorAll('.auth-panel').forEach(p=>p.classList.remove('active'));
+$('auth-'+m).classList.add('active');
+}
 
-// Ждем загрузки DOM
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('🚀 CodeVault загружается...');
-    
-    // Инициализация обработчиков
-    initEventHandlers();
-    
-    console.log('✅ CodeVault загружен');
+async function loginTG(){
+const code=$('tg-code').value.trim();
+if(!code)return toast('Введи код');
+const res=await fetch('/api/auth/telegram',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});
+if(!res.ok){const d=await res.json();return toast(d.error);}
+user=await res.json();onLogin();
+}
+
+async function loginName(){
+const name=$('login-name').value.trim();
+if(!name)return toast('Введи имя');
+const res=await fetch('/api/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:name})});
+user=await res.json();onLogin();
+}
+
+function onLogin(){
+$('auth').classList.add('hidden');
+$('app').classList.remove('hidden');
+updateUI();loadMarket();
+toast('Привет, '+user.displayName+'!');
+}
+
+function updateUI(){
+$('h-avatar').src=user.avatar;
+$('h-balance').textContent=fmt(user.balance);
+}
+
+document.querySelectorAll('.nav a').forEach(a=>{
+a.onclick=e=>{
+e.preventDefault();
+document.querySelectorAll('.nav a').forEach(x=>x.classList.remove('active'));
+document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+a.classList.add('active');
+$('tab-'+a.dataset.tab).classList.add('active');
+if(a.dataset.tab==='market')loadMarket();
+if(a.dataset.tab==='favs')loadFavs();
+if(a.dataset.tab==='profile')loadProfile();
+if(a.dataset.tab==='wallet')loadWallet();
+}});
+
+['f-search','f-cat','f-sort'].forEach(id=>{
+$(id).addEventListener('input',loadMarket);
+$(id).addEventListener('change',loadMarket);
 });
 
-function initEventHandlers() {
-    // Кнопки авторизации
-    const loginBtn = $('login-btn');
-    const registerBtn = $('register-btn');
-    const showRegisterBtn = $('show-register-btn');
-    const showLoginBtn = $('show-login-btn');
-    
-    if (loginBtn) {
-        loginBtn.addEventListener('click', login);
-        console.log('✅ Обработчик кнопки входа добавлен');
-    }
-    
-    if (registerBtn) {
-        registerBtn.addEventListener('click', register);
-        console.log('✅ Обработчик кнопки регистрации добавлен');
-    }
-    
-    if (showRegisterBtn) {
-        showRegisterBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            showRegister();
-        });
-    }
-    
-    if (showLoginBtn) {
-        showLoginBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            showLogin();
-        });
-    }
-    
-    // Проверка кода Telegram
-    const telegramCodeInput = $('telegram-code');
-    if (telegramCodeInput) {
-        telegramCodeInput.addEventListener('input', checkTelegramCode);
-    }
-    
-    // Навигация
-    document.querySelectorAll('.nav a').forEach(a => {
-        a.onclick = e => {
-            e.preventDefault();
-            document.querySelectorAll('.nav a').forEach(x => x.classList.remove('active'));
-            document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-            a.classList.add('active');
-            $('tab-' + a.dataset.tab).classList.add('active');
-            
-            if (a.dataset.tab === 'market') loadMarket();
-            if (a.dataset.tab === 'favs') loadFavs();
-            if (a.dataset.tab === 'profile') loadProfile();
-            if (a.dataset.tab === 'wallet') loadWallet();
-        }
-    });
-    
-    // Фильтры
-    ['f-search', 'f-cat', 'f-sort'].forEach(id => {
-        const element = $(id);
-        if (element) {
-            element.addEventListener('input', loadMarket);
-            element.addEventListener('change', loadMarket);
-        }
-    });
+async function loadMarket(){
+const search=$('f-search').value;
+const cat=$('f-cat').value;
+const sort=$('f-sort').value;
+const params=new URLSearchParams();
+if(search)params.append('search',search);
+if(cat!=='all')params.append('category',cat);
+params.append('sort',sort);
+
+const[prods,favs]=await Promise.all([
+fetch('/api/products?'+params).then(r=>r.json()),
+fetch('/api/favorites/'+user.username).then(r=>r.json())
+]);
+favIds=favs.map(f=>f.id);
+
+$('grid').innerHTML=prods.length===0?'<p style="color:var(--dim)">Пусто</p>':prods.map(p=>renderCard(p)).join('');
 }
 
-function showLogin() {
-    console.log('🔄 Показ экрана входа');
-    const authDiv = $('auth');
-    const registerDiv = $('register-screen');
-    if (authDiv && registerDiv) {
-        registerDiv.classList.add('hidden');
-        authDiv.classList.remove('hidden');
-    }
+function renderCard(p){
+const isFav=favIds.includes(p.id);
+return '<div class="card">'+
+'<div class="card-img" style="background-image:url('+p.preview+')">'+
+'<span class="card-cat">'+p.category+'</span>'+
+'<button class="card-fav '+(isFav?'active':'')+'" onclick="event.stopPropagation();toggleFav(\\''+p.id+'\\',this)">♥</button>'+
+'</div>'+
+'<div class="card-body">'+
+'<h3>'+esc(p.title)+'</h3>'+
+'<p>'+esc(p.description||'')+'</p>'+
+'<div class="card-footer">'+
+'<span class="price">'+fmt(p.price)+'</span>'+
+'<button class="btn btn-main" onclick="buy(\\''+p.id+'\\')">Купить</button>'+
+'</div></div></div>';
 }
 
-function showRegister() {
-    console.log('🔄 Показ экрана регистрации');
-    const authDiv = $('auth');
-    const registerDiv = $('register-screen');
-    if (authDiv && registerDiv) {
-        authDiv.classList.add('hidden');
-        registerDiv.classList.remove('hidden');
-    }
+async function buy(id){
+if(!confirm('Купить?'))return;
+const res=await fetch('/api/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.username,productId:id})});
+const d=await res.json();
+if(res.ok){user.balance=d.balance;updateUI();toast('Куплено!');loadMarket();}
+else toast(d.error);
 }
 
-async function register() {
-    console.log('📝 Начало регистрации');
-    
-    const username = $('reg-username')?.value?.trim();
-    const password = $('reg-password')?.value;
-    const password2 = $('reg-password2')?.value;
-    const telegramCode = $('telegram-code')?.value?.trim();
-    
-    if (!username || username.length < 3) {
-        return toast('Имя пользователя должно быть минимум 3 символа');
-    }
-    if (!password || password.length < 6) {
-        return toast('Пароль должен быть минимум 6 символов');
-    }
-    if (password !== password2) {
-        return toast('Пароли не совпадают');
-    }
-    
-    const btn = $('register-btn');
-    const originalText = btn.textContent;
-    
-    btn.disabled = true;
-    btn.textContent = 'Регистрация...';
-    
-    try {
-        const payload = { username, password };
-        if (telegramCode) {
-            payload.telegramCode = telegramCode;
-        }
-        
-        console.log('📡 Отправка запроса регистрации');
-        
-        const res = await fetch('/api/register', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        
-        console.log('📡 Статус ответа:', res.status);
-        
-        const data = await res.json();
-        console.log('📡 Данные ответа:', data);
-        
-        if (!res.ok) {
-            btn.disabled = false;
-            btn.textContent = originalText;
-            return toast(data.error || 'Ошибка при регистрации');
-        }
-        
-        user = data.user;
-        onLogin();
-        if (telegramCode) {
-            toast('Регистрация успешна! Telegram привязан!');
-        } else {
-            toast('Регистрация успешна!');
-        }
-    } catch (err) {
-        console.error('❌ Ошибка регистрации:', err);
-        btn.disabled = false;
-        btn.textContent = originalText;
-        toast('Ошибка соединения');
-    }
+async function toggleFav(id,btn){
+const res=await fetch('/api/favorite',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.username,productId:id})});
+const d=await res.json();
+btn.classList.toggle('active',d.favorited);
+if(d.favorited)favIds.push(id);else favIds=favIds.filter(x=>x!==id);
 }
 
-async function login() {
-    console.log('🔑 Начало входа');
-    
-    const username = $('login-name')?.value?.trim();
-    const password = $('login-password')?.value;
-    
-    if (!username || !password) {
-        return toast('Введите логин и пароль');
-    }
-    
-    const btn = $('login-btn');
-    const originalText = btn.textContent;
-    
-    btn.disabled = true;
-    btn.textContent = 'Вход...';
-    
-    try {
-        const res = await fetch('/api/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password })
-        });
-        
-        if (!res.ok) {
-            const data = await res.json();
-            btn.disabled = false;
-            btn.textContent = originalText;
-            return toast(data.error || 'Ошибка входа');
-        }
-        
-        user = await res.json();
-        onLogin();
-        toast('Добро пожаловать!');
-    } catch (err) {
-        console.error('❌ Ошибка входа:', err);
-        btn.disabled = false;
-        btn.textContent = originalText;
-        toast('Ошибка соединения');
-    }
+async function loadFavs(){
+const favs=await fetch('/api/favorites/'+user.username).then(r=>r.json());
+favIds=favs.map(f=>f.id);
+$('favs-grid').innerHTML=favs.length===0?'<p style="color:var(--dim)">Пусто</p>':favs.map(p=>renderCard(p)).join('');
 }
 
-function onLogin() {
-    console.log('🎉 Пользователь вошел в систему');
-    const authDiv = $('auth');
-    const registerDiv = $('register-screen');
-    const appDiv = $('app');
-    
-    if (authDiv && registerDiv && appDiv) {
-        authDiv.classList.add('hidden');
-        registerDiv.classList.add('hidden');
-        appDiv.classList.remove('hidden');
-        updateUI();
-        loadMarket();
-    }
+async function loadProfile(){
+const data=await fetch('/api/user/'+user.username).then(r=>r.json());
+user={...user,...data};updateUI();
+
+$('p-avatar').src=data.avatar;
+$('p-name').textContent=data.displayName;
+$('p-bio').textContent=data.bio;
+$('s-products').textContent=data.stats.products;
+$('s-sales').textContent=data.stats.sales;
+$('s-earned').textContent=fmt(data.stats.earned);
+$('e-name').value=data.displayName;
+$('e-bio').value=data.bio;
+
+$('owned').innerHTML=data.ownedProducts.length===0?'<p style="color:var(--dim)">Пусто</p>':data.ownedProducts.map(p=>
+'<div class="mini-card"><h4>'+esc(p.title)+'</h4><a href="/api/download/'+p.id+'?username='+user.username+'" class="btn btn-main">Скачать</a></div>'
+).join('');
 }
 
-function updateUI() {
-    const avatar = $('h-avatar');
-    const balance = $('h-balance');
-    
-    if (avatar && user?.avatar) {
-        avatar.src = user.avatar;
-    }
-    if (balance && user?.balance !== undefined) {
-        balance.textContent = fmt(user.balance);
-    }
+async function saveProfile(){
+await fetch('/api/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.username,displayName:$('e-name').value,bio:$('e-bio').value})});
+toast('Сохранено!');loadProfile();
 }
 
-async function checkTelegramCode() {
-    const input = this;
-    const code = input.value.trim();
-    
-    if (code.length >= 6) {
-        try {
-            const res = await fetch('/api/check-telegram-code', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ code })
-            });
-            
-            if (res.ok) {
-                const data = await res.json();
-                input.style.borderColor = 'var(--green)';
-                toast(\`Код подтвержден! (\${data.expiresIn} мин. до истечения)\`);
-            } else {
-                input.style.borderColor = 'var(--red)';
-            }
-        } catch (err) {
-            console.log('Ошибка проверки кода:', err);
-        }
-    } else {
-        input.style.borderColor = 'var(--border)';
-    }
+async function loadWallet(){
+const data=await fetch('/api/user/'+user.username).then(r=>r.json());
+user.balance=data.balance;updateUI();
+$('w-bal').textContent=fmt(data.balance);
+
+$('tx').innerHTML=data.transactions.length===0?'<p style="padding:16px;color:var(--dim)">Нет операций</p>':data.transactions.map(t=>
+'<div class="tx"><div><b>'+t.desc+'</b><br><small>'+new Date(t.date).toLocaleString('ru-RU')+'</small></div><span class="'+(t.amount>0?'tx-plus':'tx-minus')+'">'+(t.amount>0?'+':'')+fmt(t.amount)+'</span></div>'
+).join('');
 }
 
-async function loadMarket() {
-    if (!user) return;
-    
-    const search = $('f-search')?.value || '';
-    const cat = $('f-cat')?.value || 'all';
-    const sort = $('f-sort')?.value || 'newest';
-    const params = new URLSearchParams();
-    
-    if (search) params.append('search', search);
-    if (cat !== 'all') params.append('category', cat);
-    params.append('sort', sort);
-
-    try {
-        const [prods, favs] = await Promise.all([
-            fetch('/api/products?' + params).then(r => r.json()),
-            fetch('/api/favorites/' + user.username).then(r => r.json())
-        ]);
-        
-        favIds = favs.map(f => f.id);
-        const gridElement = $('grid');
-        if (gridElement) {
-            gridElement.innerHTML = prods.length === 0 
-                ? '<p style="color:var(--dim);text-align:center;padding:20px;">Ничего не найдено</p>' 
-                : prods.map(p => renderCard(p)).join('');
-        }
-    } catch (err) {
-        console.error('❌ Ошибка загрузки товаров:', err);
-        toast('Ошибка загрузки товаров');
-    }
+async function topUp(amount){
+const res=await fetch('/api/topup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.username,amount})});
+const d=await res.json();
+user.balance=d.balance;updateUI();loadWallet();
+toast('+'+fmt(amount));
 }
 
-function renderCard(p) {
-    const isFav = favIds.includes(p.id);
-    return '<div class="card">' +
-           '<div class="card-img" style="background-image:url(' + p.preview + ')">' +
-           '<span class="card-cat">' + p.category + '</span>' +
-           '<button class="card-fav ' + (isFav ? 'active' : '') + '" onclick="event.stopPropagation();toggleFav(\'' + p.id + '\',this)">♥</button>' +
-           '</div>' +
-           '<div class="card-body">' +
-           '<h3>' + esc(p.title) + '</h3>' +
-           '<p>' + esc(p.description || '') + '</p>' +
-           '<div class="card-footer">' +
-           '<span class="price">' + fmt(p.price) + '</span>' +
-           '<button class="btn btn-main" onclick="buy(\'' + p.id + '\')">Купить</button>' +
-           '</div></div></div>';
+async function publish(){
+const title=$('u-title').value.trim();
+const price=$('u-price').value;
+const desc=$('u-desc').value.trim();
+const cat=$('u-cat').value;
+const file=$('u-file').files[0];
+if(!title||!price||!desc)return toast('Заполни все поля');
+
+const fd=new FormData();
+fd.append('username',user.username);
+fd.append('title',title);
+fd.append('price',price);
+fd.append('description',desc);
+fd.append('category',cat);
+if(file)fd.append('file',file);
+
+const res=await fetch('/api/publish',{method:'POST',body:fd});
+if(res.ok){
+toast('Опубликовано!');
+$('u-title').value='';$('u-price').value='';$('u-desc').value='';$('u-file').value='';
+document.querySelector('[data-tab="market"]').click();
 }
-
-async function buy(id) {
-    if (!confirm('Купить этот товар?')) return;
-    
-    try {
-        const res = await fetch('/api/buy', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: user.username, productId: id })
-        });
-        
-        const data = await res.json();
-        
-        if (res.ok) {
-            user.balance = data.balance;
-            updateUI();
-            toast('Товар успешно куплен!');
-            loadMarket();
-        } else {
-            toast(data.error || 'Ошибка при покупке');
-        }
-    } catch (err) {
-        toast('Ошибка соединения');
-    }
-}
-
-async function toggleFav(id, btn) {
-    try {
-        const res = await fetch('/api/favorite', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: user.username, productId: id })
-        });
-        
-        const data = await res.json();
-        btn.classList.toggle('active', data.favorited);
-        
-        if (data.favorited) {
-            favIds.push(id);
-            toast('Добавлено в избранное');
-        } else {
-            favIds = favIds.filter(x => x !== id);
-            toast('Удалено из избранного');
-        }
-    } catch (err) {
-        toast('Ошибка соединения');
-    }
-}
-
-async function loadFavs() {
-    try {
-        const favs = await fetch('/api/favorites/' + user.username).then(r => r.json());
-        favIds = favs.map(f => f.id);
-        
-        const favsGrid = $('favs-grid');
-        if (favsGrid) {
-            favsGrid.innerHTML = favs.length === 0 
-                ? '<p style="color:var(--dim);text-align:center;padding:20px;">В избранном ничего нет</p>' 
-                : favs.map(p => renderCard(p)).join('');
-        }
-    } catch (err) {
-        toast('Ошибка загрузки избранного');
-    }
-}
-
-async function loadProfile() {
-    try {
-        const data = await fetch('/api/user/' + user.username).then(r => r.json());
-        user = { ...user, ...data };
-        updateUI();
-
-        const avatar = $('p-avatar');
-        const name = $('p-name');
-        const bio = $('p-bio');
-        const products = $('s-products');
-        const sales = $('s-sales');
-        const earned = $('s-earned');
-        const nameInput = $('e-name');
-        const bioInput = $('e-bio');
-        const owned = $('owned');
-
-        if (avatar) avatar.src = data.avatar;
-        if (name) name.textContent = data.displayName;
-        if (bio) bio.textContent = data.bio || 'О себе не указано';
-        if (products) products.textContent = data.stats.products;
-        if (sales) sales.textContent = data.stats.sales;
-        if (earned) earned.textContent = fmt(data.stats.earned);
-        if (nameInput) nameInput.value = data.displayName;
-        if (bioInput) bioInput.value = data.bio || '';
-
-        if (owned) {
-            owned.innerHTML = data.ownedProducts.length === 0 
-                ? '<p style="color:var(--dim)">У вас пока нет покупок</p>' 
-                : data.ownedProducts.map(p => 
-                    '<div class="mini-card"><h4>' + esc(p.title) + '</h4>' +
-                    '<a href="/api/download/' + p.id + '?username=' + user.username + 
-                    '" class="btn btn-main">Скачать</a></div>'
-                ).join('');
-        }
-    } catch (err) {
-        toast('Ошибка загрузки профиля');
-    }
-}
-
-async function saveProfile() {
-    try {
-        const nameInput = $('e-name');
-        const bioInput = $('e-bio');
-        
-        await fetch('/api/profile', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                username: user.username,
-                displayName: nameInput?.value || '',
-                bio: bioInput?.value || ''
-            })
-        });
-        
-        toast('Профиль сохранен');
-        loadProfile();
-    } catch (err) {
-        toast('Ошибка сохранения');
-    }
-}
-
-async function loadWallet() {
-    try {
-        const data = await fetch('/api/user/' + user.username).then(r => r.json());
-        user.balance = data.balance;
-        updateUI();
-        
-        const walletBal = $('w-bal');
-        const txList = $('tx');
-        
-        if (walletBal) walletBal.textContent = fmt(data.balance);
-
-        if (txList) {
-            txList.innerHTML = !data.transactions || data.transactions.length === 0 
-                ? '<p style="padding:16px;color:var(--dim);text-align:center;">Нет операций</p>' 
-                : data.transactions.map(t => 
-                    '<div class="tx"><div><b>' + t.desc + '</b><br>' +
-                    '<small>' + new Date(t.date).toLocaleString('ru-RU') + '</small></div>' +
-                    '<span class="' + (t.amount > 0 ? 'tx-plus' : 'tx-minus') + '">' +
-                    (t.amount > 0 ? '+' : '') + fmt(t.amount) + '</span></div>'
-                ).join('');
-        }
-    } catch (err) {
-        toast('Ошибка загрузки истории');
-    }
-}
-
-async function topUp(amount) {
-    try {
-        const res = await fetch('/api/topup', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: user.username, amount })
-        });
-        
-        const data = await res.json();
-        
-        if (res.ok) {
-            user.balance = data.balance;
-            updateUI();
-            loadWallet();
-            toast('Баланс пополнен на ' + fmt(amount));
-        }
-    } catch (err) {
-        toast('Ошибка пополнения');
-    }
-}
-
-async function publish() {
-    const title = $('u-title')?.value?.trim();
-    const price = $('u-price')?.value;
-    const desc = $('u-desc')?.value?.trim();
-    const cat = $('u-cat')?.value;
-    const file = $('u-file')?.files[0];
-    
-    if (!title) return toast('Укажите название');
-    if (!price) return toast('Укажите цену');
-    if (!desc) return toast('Добавьте описание');
-
-    try {
-        const fd = new FormData();
-        fd.append('username', user.username);
-        fd.append('title', title);
-        fd.append('price', price);
-        fd.append('description', desc);
-        fd.append('category', cat);
-        
-        if (file) fd.append('file', file);
-
-        const res = await fetch('/api/publish', { method: 'POST', body: fd });
-        
-        if (res.ok) {
-            toast('Товар опубликован!');
-            $('u-title').value = '';
-            $('u-price').value = '';
-            $('u-desc').value = '';
-            $('u-file').value = '';
-            document.querySelector('[data-tab="market"]').click();
-        } else {
-            const data = await res.json();
-            toast(data.error || 'Ошибка публикации');
-        }
-    } catch (err) {
-        toast('Ошибка соединения');
-    }
 }
 </script>
 </body>
@@ -1455,57 +771,20 @@ async function publish() {
 
 app.get('/', (req, res) => res.send(HTML));
 
-// Очистка устаревших кодов каждые 5 минут
-setInterval(() => {
-    const before = registrationCodes.length;
-    registrationCodes = registrationCodes.filter(c => c.expiresAt > Date.now());
-    const after = registrationCodes.length;
-    if (before !== after) {
-        console.log(`🧹 Очищено ${before - after} устаревших кодов регистрации`);
-    }
-}, 5 * 60 * 1000);
+// ═══════════════════════════════════════════════════════════
+// ЗАПУСК
+// ═══════════════════════════════════════════════════════════
+app.listen(PORT, async () => {
+    console.log('CodeVault started on port ' + PORT);
 
-// ═══════════════════════════════════════════════════════════
-// ЗАПУСК С ОБРАБОТКОЙ ОШИБОК
-// ═══════════════════════════════════════════════════════════
-const server = app.listen(PORT, async (error) => {
-    if (error) {
-        console.error('❌ Ошибка запуска сервера:', error);
-        return;
-    }
-    
-    console.log(`✅ CodeVault запущен на порту ${PORT}`);
-    
-    if (BOT_TOKEN) {
-        const webhookUrl = `${DOMAIN}${WEBHOOK_PATH}`;
-        console.log(`🔄 Настройка вебхука: ${webhookUrl}`);
-        
+    if (BOT_TOKEN && BOT_TOKEN !== '8035930401:AAH4bICwB8LVXApFEIaLmOlsYD9PyO5sylI') {
         try {
-            const res = await fetch(`${TELEGRAM_API}/setWebhook`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url: webhookUrl })
-            });
-            
+            const webhookUrl = DOMAIN + WEBHOOK_PATH;
+            const res = await fetch(TELEGRAM_API + '/setWebhook?url=' + webhookUrl);
             const data = await res.json();
-            
-            if (data.ok) {
-                console.log('✅ Webhook установлен успешно!');
-            } else {
-                console.error('❌ Ошибка установки webhook:', data.description);
-            }
-        } catch (error) {
-            console.error('❌ Ошибка запроса webhook:', error.message);
+            console.log('Webhook:', data.ok ? 'OK' : 'FAIL');
+        } catch (e) {
+            console.log('Webhook error:', e.message);
         }
-    } else {
-        console.warn('⚠️ Бот выключен (переменная BOT_TOKEN не установлена)');
-    }
-});
-
-server.on('error', (err) => {
-    console.error('❌ Ошибка сервера:', err);
-    if (err.code === 'EADDRINUSE') {
-        console.error(`❌ КРИТИЧЕСКАЯ ОШИБКА: Порт ${PORT} уже используется!`);
-        process.exit(1);
     }
 });
