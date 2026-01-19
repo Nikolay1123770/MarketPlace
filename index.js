@@ -930,7 +930,7 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
 <input type="text" id="tg-code" class="code-input" placeholder="XXXXXX" maxlength="6">
 <button class="btn btn-main" onclick="loginTG()">Войти</button>
 <div class="divider">бот</div>
-<a href="https://t.me/CodeVault_Shop_bot" target="_blank">
+<a href="http://t.me/RegisterMarketPlace_bot" target="_blank">
 <button class="btn btn-secondary">🤖 Открыть бота</button>
 </a>
 </div>
