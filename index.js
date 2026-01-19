@@ -16,7 +16,7 @@ const BOT_USERNAME = 'RegisterMarketPlace_bot';
 // ═══════════════════════════════════════════════════════════
 // ЮMONEY - ЗАМЕНИТЕ НА СВОИ ДАННЫЕ!
 // ═══════════════════════════════════════════════════════════
-const YOOMONEY_WALLET = process.env.YOOMONEY_WALLET || '4100118944797800';
+const YOOMONEY_WALLET = process.env.YOOMONEY_WALLET || '4100118889570559';
 const YOOMONEY_SECRET = process.env.YOOMONEY_SECRET || 'fL8QIMDHIeudGlqCPNR7eux/';
 
 const app = express();
