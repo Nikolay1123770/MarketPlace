@@ -279,7 +279,7 @@ app.post('/api/auth/register/start', (req, res) => {
     setTimeout(() => pendingRegistrations.delete(regId), 15 * 60 * 1000);
     
     // Формируем ссылку на бота с deep link
-    const botUsername = 'CodeVault_Shop_bot'; // Замените на username вашего бота
+    const botUsername = 'RegisterMarketPlace_bot'; // Замените на username вашего бота
     const botLink = `https://t.me/${botUsername}?start=reg_${regId}`;
     
     res.json({ 
