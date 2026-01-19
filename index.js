@@ -3,19 +3,15 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const fetch = require('node-fetch');
+const cron = require('node-cron');
 
-// ═══════════════════════════════════════════════════════════
-// КОНФИГУРАЦИЯ
-// ═══════════════════════════════════════════════════════════
+// Конфигурация
 const BOT_TOKEN = process.env.BOT_TOKEN || '8035930401:AAH4bICwB8LVXApFEIaLmOlsYD9PyO5sylI';
 const PORT = process.env.PORT || 3000;
 const WEBHOOK_PATH = `/webhook/${BOT_TOKEN}`;
 const DOMAIN = 'https://marketplacebot.bothost.ru';
 const BOT_USERNAME = 'RegisterMarketPlace_bot';
-
-// ═══════════════════════════════════════════════════════════
-// ЮMONEY - ЗАМЕНИТЕ НА СВОИ ДАННЫЕ!
-// ═══════════════════════════════════════════════════════════
 const YOOMONEY_WALLET = process.env.YOOMONEY_WALLET || '4100118944797800';
 const YOOMONEY_SECRET = process.env.YOOMONEY_SECRET || 'fL8QIMDHIeudGlqCPNR7eux/';
 
@@ -23,29 +19,31 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Папка для загрузок
 const UPLOADS = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS)) fs.mkdirSync(UPLOADS, { recursive: true });
 
+// Настройка Multer
 const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, UPLOADS),
-    filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
+    filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname),
 });
 const upload = multer({ storage });
 app.use('/uploads', express.static(UPLOADS));
 
-// ═══════════════════════════════════════════════════════════
-// БАЗА ДАННЫХ С СОХРАНЕНИЕМ В ФАЙЛ
-// ═══════════════════════════════════════════════════════════
+// База данных
 const DB_FILE = path.join(__dirname, 'database.json');
-
 let db = {
     users: [],
     products: [],
     transactions: [],
-    favorites: []
+    favorites: [],
+    comments: [],
+    ratings: [],
+    chats: [],
 };
 
-// Загрузка базы при старте
+// Загрузка базы данных
 function loadDB() {
     try {
         if (fs.existsSync(DB_FILE)) {
@@ -58,7 +56,7 @@ function loadDB() {
     }
 }
 
-// Сохранение базы
+// Сохранение базы данных
 function saveDB() {
     try {
         fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
@@ -70,52 +68,52 @@ function saveDB() {
 // Автосохранение каждые 30 секунд
 setInterval(saveDB, 30000);
 
-// Загружаем при старте
+// Загрузка базы данных при старте
 loadDB();
 
+// Вспомогательные переменные
 let pendingPayments = new Map();
 const registerCodes = new Map();
 const pendingRegistrations = new Map();
 
+// Хэширование пароля
 function hashPassword(password) {
     return crypto.createHash('sha256').update(password).digest('hex');
 }
 
+// Генерация ID платежа
 function generatePaymentId() {
     return 'PAY_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
 }
 
-// ═══════════════════════════════════════════════════════════
-// TELEGRAM API
-// ═══════════════════════════════════════════════════════════
+// Telegram API
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
+// Отправка сообщения в Telegram
 async function sendMessage(chatId, text, options = {}) {
     try {
         await fetch(`${TELEGRAM_API}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', ...options })
+            body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', ...options }),
         });
     } catch (e) {
         console.error('TG error:', e.message);
     }
 }
 
+// Ответ на callback-запрос
 async function answerCallback(callbackId, text = '', showAlert = false) {
     try {
         await fetch(`${TELEGRAM_API}/answerCallbackQuery`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ callback_query_id: callbackId, text, show_alert: showAlert })
+            body: JSON.stringify({ callback_query_id: callbackId, text, show_alert: showAlert }),
         });
     } catch (e) {}
 }
 
-// ═══════════════════════════════════════════════════════════
-// ЮMONEY ПЛАТЕЖИ
-// ═══════════════════════════════════════════════════════════
-
+// Создание URL для платежа ЮMoney
 function createPaymentUrl(amount, paymentId) {
     const params = new URLSearchParams({
         receiver: YOOMONEY_WALLET,
@@ -124,55 +122,145 @@ function createPaymentUrl(amount, paymentId) {
         paymentType: 'PC',
         sum: amount,
         label: paymentId,
-        successURL: `${DOMAIN}/payment/success?id=${paymentId}`
+        successURL: `${DOMAIN}/payment/success?id=${paymentId}`,
     });
     return `https://yoomoney.ru/quickpay/confirm.xml?${params.toString()}`;
 }
 
+// Создание пользователя
+function createUser(username, telegramId, displayName, passwordHash) {
+    const user = {
+        id: Date.now().toString(),
+        telegramId,
+        username,
+        passwordHash,
+        displayName: displayName || username,
+        bio: 'Новый участник',
+        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`,
+        balance: 100,
+        earned: 0,
+        joined: new Date().toLocaleDateString('ru-RU'),
+        inventory: [],
+        myProducts: [],
+        isPremium: false,
+        premiumExpires: null,
+        premiumAutoRenew: false,
+    };
+
+    db.users.push(user);
+    db.transactions.push({
+        id: Date.now().toString(),
+        userId: user.id,
+        type: 'bonus',
+        amount: 100,
+        desc: '🎁 Бонус',
+        date: new Date().toISOString(),
+    });
+
+    saveDB();
+    console.log(`👤 New user: ${username}`);
+    return user;
+}
+
+// Проверка и продление премиум-подписок
+cron.schedule('0 0 * * *', () => {
+    db.users.forEach(user => {
+        if (user.isPremium && user.premiumAutoRenew && user.premiumExpires) {
+            const expiresDate = new Date(user.premiumExpires);
+            const now = new Date();
+
+            if (expiresDate.toDateString() === now.toDateString()) {
+                const subscriptionCost = 500;
+
+                if (user.balance >= subscriptionCost) {
+                    user.balance -= subscriptionCost;
+                    user.premiumExpires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+                    db.transactions.push({
+                        id: Date.now().toString(),
+                        userId: user.id,
+                        type: 'subscription_renewal',
+                        amount: -subscriptionCost,
+                        desc: '🔄 Продление премиум-подписки',
+                        date: new Date().toISOString(),
+                    });
+
+                    if (user.telegramId) {
+                        sendMessage(
+                            user.telegramId,
+                            `🔄 <b>Подписка продлена!</b>\n\n💰 Списано: ${subscriptionCost} ₽\n📅 Действует до: ${new Date(user.premiumExpires).toLocaleDateString('ru-RU')}`,
+                        );
+                    }
+                } else {
+                    user.isPremium = false;
+                    if (user.telegramId) {
+                        sendMessage(
+                            user.telegramId,
+                            `⚠️ <b>Подписка отключена</b>\n\n💰 Недостаточно средств для продления. Пополните баланс.`,
+                        );
+                    }
+                }
+            }
+        }
+    });
+
+    saveDB();
+    console.log('⏰ Проверка подписок выполнена');
+});
+
+// Уведомления о подписке за 3 дня
+cron.schedule('0 12 * * *', () => {
+    const now = new Date();
+    const threeDaysLater = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+
+    db.users.forEach(user => {
+        if (user.isPremium && user.premiumExpires && user.premiumAutoRenew) {
+            const expiresDate = new Date(user.premiumExpires);
+            if (expiresDate.toDateString() === threeDaysLater.toDateString()) {
+                if (user.telegramId) {
+                    sendMessage(
+                        user.telegramId,
+                        `⏳ <b>Подписка истекает через 3 дня!</b>\n\n📅 Дата окончания: ${expiresDate.toLocaleDateString('ru-RU')}\n💰 Баланс: ${user.balance} ₽\n\nПополните баланс, чтобы избежать отключения.`,
+                    );
+                }
+            }
+        }
+    });
+});
+
+// API для платежей
 app.post('/api/payment/create', (req, res) => {
     const { username, amount } = req.body;
-    
-    console.log(`💳 Payment request: username=${username}, amount=${amount}`);
-    
-    if (!username) {
-        return res.status(400).json({ error: 'Не указан пользователь' });
-    }
-    
     const user = db.users.find(u => u.username.toLowerCase() === username.toLowerCase());
-    
+
     if (!user) {
-        console.log(`❌ User not found: ${username}`);
-        console.log(`   Available users: ${db.users.map(u => u.username).join(', ') || 'none'}`);
         return res.status(404).json({ error: 'Сессия истекла. Войдите заново.' });
     }
-    
+
     const sum = Number(amount);
     if (!sum || sum < 10) return res.status(400).json({ error: 'Минимум 10 ₽' });
     if (sum > 100000) return res.status(400).json({ error: 'Максимум 100 000 ₽' });
-    
+
     const paymentId = generatePaymentId();
-    
     pendingPayments.set(paymentId, {
         id: paymentId,
-        oderId: user.id,
+        userId: user.id,
         username: username,
         amount: sum,
         status: 'pending',
-        createdAt: Date.now()
+        createdAt: Date.now(),
     });
-    
+
     setTimeout(() => {
         const p = pendingPayments.get(paymentId);
         if (p && p.status === 'pending') pendingPayments.delete(paymentId);
     }, 60 * 60 * 1000);
-    
+
     const paymentUrl = createPaymentUrl(sum, paymentId);
-    
-    console.log(`✅ Payment created: ${paymentId}, ${sum}₽ for ${username}`);
-    
     res.json({ success: true, paymentId, paymentUrl, amount: sum });
 });
 
+// Статус платежа
 app.get('/api/payment/status/:paymentId', (req, res) => {
     const payment = pendingPayments.get(req.params.paymentId);
     if (!payment) return res.status(404).json({ error: 'Не найден' });
@@ -181,52 +269,47 @@ app.get('/api/payment/status/:paymentId', (req, res) => {
 
 // Webhook от ЮMoney
 app.post('/api/yoomoney/webhook', (req, res) => {
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('💰 YooMoney webhook received');
-    
     const { notification_type, operation_id, amount, currency, datetime, sender, codepro, label, sha1_hash, test_notification } = req.body;
-    
+
     if (test_notification === 'true') {
         console.log('✅ Тестовое уведомление - OK');
         return res.send('OK');
     }
-    
+
     if (!label) {
         console.log('⚠️ Пустой label');
         return res.send('OK');
     }
-    
+
     const payment = pendingPayments.get(label);
     if (!payment) {
         console.log('❌ Payment not found:', label);
         return res.status(404).send('Not found');
     }
-    
+
     if (payment.status === 'completed') {
         return res.send('OK');
     }
-    
+
     const receivedAmount = parseFloat(amount);
-    
     const user = db.users.find(u => u.username === payment.username);
+
     if (user) {
         user.balance += receivedAmount;
-        
+
         db.transactions.push({
             id: Date.now().toString(),
-            oderId: user.id,
+            userId: user.id,
             type: 'deposit',
             amount: receivedAmount,
             desc: '💳 Пополнение ЮMoney',
             paymentId: label,
-            date: new Date().toISOString()
+            date: new Date().toISOString(),
         });
-        
+
         payment.status = 'completed';
         saveDB();
-        
-        console.log(`✅ +${receivedAmount}₽ для ${user.username}. Баланс: ${user.balance}₽`);
-        
+
         if (user.telegramId) {
             sendMessage(user.telegramId,
                 `✅ <b>Баланс пополнен!</b>\n\n💰 +${receivedAmount.toLocaleString()} ₽\n💳 Баланс: ${user.balance.toLocaleString()} ₽`,
@@ -234,14 +317,15 @@ app.post('/api/yoomoney/webhook', (req, res) => {
             );
         }
     }
-    
+
     res.send('OK');
 });
 
+// Страница успешного платежа
 app.get('/payment/success', (req, res) => {
     const { id } = req.query;
     const payment = pendingPayments.get(id);
-    
+
     res.send(`<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -295,22 +379,20 @@ setInterval(async () => {
 </html>`);
 });
 
-// ═══════════════════════════════════════════════════════════
-// TELEGRAM WEBHOOK
-// ═══════════════════════════════════════════════════════════
+// Telegram Webhook
 app.post(WEBHOOK_PATH, async (req, res) => {
     const { message, callback_query } = req.body;
-    
+
     if (callback_query) {
         const chatId = callback_query.message.chat.id;
         const data = callback_query.data;
         const from = callback_query.from;
-        
+
         if (data === 'my_balance') {
             const user = db.users.find(u => u.telegramId === from.id);
             if (user) {
                 await answerCallback(callback_query.id);
-                await sendMessage(chatId, 
+                await sendMessage(chatId,
                     `💎 <b>${user.displayName}</b>\n\n💰 Баланс: <b>${user.balance.toLocaleString()} ₽</b>\n📦 Товаров: <b>${user.myProducts.length}</b>\n🛒 Покупок: <b>${user.inventory.length}</b>`,
                     { reply_markup: { inline_keyboard: [[{ text: '💳 Пополнить', url: DOMAIN }], [{ text: '◀️ Назад', callback_data: 'main_menu' }]] } }
                 );
@@ -332,17 +414,17 @@ app.post(WEBHOOK_PATH, async (req, res) => {
         else if (data.startsWith('confirm_reg_')) {
             const regId = data.replace('confirm_reg_', '');
             const pending = pendingRegistrations.get(regId);
-            
+
             if (pending) {
                 if (db.users.find(u => u.telegramId === from.id)) {
                     await answerCallback(callback_query.id, '⚠️ TG уже привязан!', true);
                     return res.sendStatus(200);
                 }
-                
+
                 const code = Math.random().toString(36).substring(2, 8).toUpperCase();
                 registerCodes.set(code, { regId, telegramId: from.id, username: pending.username, passwordHash: pending.passwordHash, firstName: from.first_name, createdAt: Date.now() });
                 setTimeout(() => registerCodes.delete(code), 10 * 60 * 1000);
-                
+
                 await answerCallback(callback_query.id, '✅ Код создан!');
                 await sendMessage(chatId, `✅ <b>Код подтверждения</b>\n\n👤 <b>${pending.username}</b>\n\n🔐 Код:\n\n<code>${code}</code>\n\n⏱ 10 минут`,
                     { reply_markup: { inline_keyboard: [[{ text: '🌐 На сайт', url: DOMAIN }]] } }
@@ -351,10 +433,10 @@ app.post(WEBHOOK_PATH, async (req, res) => {
                 await answerCallback(callback_query.id, '❌ Устарело', true);
             }
         }
-        
+
         return res.sendStatus(200);
     }
-    
+
     if (!message || !message.text) return res.sendStatus(200);
 
     const chatId = message.chat.id;
@@ -364,13 +446,13 @@ app.post(WEBHOOK_PATH, async (req, res) => {
     if (text.startsWith('/start reg_')) {
         const regId = text.replace('/start reg_', '');
         const pending = pendingRegistrations.get(regId);
-        
+
         if (pending) {
             if (db.users.find(u => u.telegramId === from.id)) {
                 await sendMessage(chatId, `⚠️ <b>TG уже привязан!</b>`, { reply_markup: { inline_keyboard: [[{ text: '🌐 Войти', url: DOMAIN }]] } });
                 return res.sendStatus(200);
             }
-            
+
             await sendMessage(chatId, `📝 <b>Регистрация</b>\n\n👤 <b>${pending.username}</b>\n\nНажмите для получения кода:`,
                 { reply_markup: { inline_keyboard: [[{ text: '✅ Получить код', callback_data: `confirm_reg_${regId}` }], [{ text: '❌ Отмена', callback_data: 'main_menu' }]] } }
             );
@@ -396,6 +478,7 @@ app.post(WEBHOOK_PATH, async (req, res) => {
     res.sendStatus(200);
 });
 
+// Показать главное меню
 async function showMainMenu(chatId, from, user) {
     if (user) {
         await sendMessage(chatId, `🎉 <b>Привет, ${from.first_name}!</b>\n\n🛒 <b>CodeVault</b>\n\n💰 ${user.balance.toLocaleString()} ₽\n📦 ${user.myProducts.length} товаров\n🛒 ${user.inventory.length} покупок`,
@@ -408,18 +491,14 @@ async function showMainMenu(chatId, from, user) {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// AUTH API
-// ═══════════════════════════════════════════════════════════
-
-// Проверка сессии
+// API для аутентификации
 app.post('/api/auth/check', (req, res) => {
     const { username } = req.body;
     if (!username) return res.status(400).json({ valid: false });
-    
+
     const user = db.users.find(u => u.username.toLowerCase() === username.toLowerCase());
     if (!user) return res.json({ valid: false });
-    
+
     const { passwordHash, ...safeUser } = user;
     res.json({ valid: true, user: safeUser });
 });
@@ -427,123 +506,184 @@ app.post('/api/auth/check', (req, res) => {
 app.post('/api/auth/login', (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: 'Заполните поля' });
-    
+
     const user = db.users.find(u => u.username.toLowerCase() === username.toLowerCase().trim());
     if (!user) return res.status(401).json({ error: 'Пользователь не найден' });
     if (!user.passwordHash) return res.status(401).json({ error: 'Установите пароль' });
     if (user.passwordHash !== hashPassword(password)) return res.status(401).json({ error: 'Неверный пароль' });
-    
+
     const { passwordHash, ...safeUser } = user;
     res.json({ user: safeUser, token: user.id });
 });
 
 app.post('/api/auth/register/start', (req, res) => {
     const { username, password, confirmPassword } = req.body;
-    
+
     if (!username || !password || !confirmPassword) return res.status(400).json({ error: 'Заполните все поля' });
     if (username.length < 3) return res.status(400).json({ error: 'Логин минимум 3 символа' });
     if (!/^[a-zA-Z0-9_]+$/.test(username)) return res.status(400).json({ error: 'Логин: буквы, цифры, _' });
     if (password.length < 4) return res.status(400).json({ error: 'Пароль минимум 4 символа' });
     if (password !== confirmPassword) return res.status(400).json({ error: 'Пароли не совпадают' });
-    
+
     if (db.users.find(u => u.username.toLowerCase() === username.toLowerCase())) {
         return res.status(400).json({ error: 'Логин занят' });
     }
-    
+
     const regId = crypto.randomBytes(16).toString('hex');
     pendingRegistrations.set(regId, { username: username.trim(), passwordHash: hashPassword(password), createdAt: Date.now() });
     setTimeout(() => pendingRegistrations.delete(regId), 15 * 60 * 1000);
-    
+
     res.json({ success: true, regId, botLink: `https://t.me/${BOT_USERNAME}?start=reg_${regId}` });
 });
 
 app.post('/api/auth/register/confirm', (req, res) => {
     const { code } = req.body;
     if (!code) return res.status(400).json({ error: 'Введите код' });
-    
+
     const regData = registerCodes.get(code.toUpperCase());
     if (!regData) return res.status(401).json({ error: 'Неверный код' });
-    
+
     registerCodes.delete(code.toUpperCase());
     pendingRegistrations.delete(regData.regId);
-    
+
     if (db.users.find(u => u.username.toLowerCase() === regData.username.toLowerCase())) {
         return res.status(400).json({ error: 'Логин занят' });
     }
     if (db.users.find(u => u.telegramId === regData.telegramId)) {
         return res.status(400).json({ error: 'TG уже привязан' });
     }
-    
+
     const user = createUser(regData.username, regData.telegramId, regData.firstName, regData.passwordHash);
-    
+
     sendMessage(regData.telegramId, `🎉 <b>Готово!</b>\n\n👤 ${user.username}\n💰 ${user.balance} ₽`,
         { reply_markup: { inline_keyboard: [[{ text: '🛒 Открыть', url: DOMAIN }]] } }
     );
-    
+
     const { passwordHash, ...safeUser } = user;
     res.json({ user: safeUser, token: user.id });
 });
 
-function createUser(username, telegramId, displayName, passwordHash) {
-    const user = {
+// API для комментариев
+app.post('/api/comments/add', (req, res) => {
+    const { username, productId, text } = req.body;
+    const user = db.users.find(u => u.username === username);
+
+    if (!user || !productId || !text) {
+        return res.status(400).json({ error: "Некорректные данные" });
+    }
+
+    const comment = {
         id: Date.now().toString(),
-        telegramId,
-        username,
-        passwordHash,
-        displayName: displayName || username,
-        bio: 'Новый участник',
-        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`,
-        balance: 100,
-        earned: 0,
-        joined: new Date().toLocaleDateString('ru-RU'),
-        inventory: [],
-        myProducts: []
+        productId,
+        userId: user.id,
+        username: user.username,
+        text,
+        createdAt: new Date().toISOString(),
     };
-    db.users.push(user);
-    
-    db.transactions.push({
-        id: Date.now().toString(),
-        oderId: user.id,
-        type: 'bonus',
-        amount: 100,
-        desc: '🎁 Бонус',
-        date: new Date().toISOString()
-    });
-    
+
+    db.comments.push(comment);
     saveDB();
-    console.log(`👤 New user: ${username}`);
-    
-    return user;
-}
-
-// ═══════════════════════════════════════════════════════════
-// API
-// ═══════════════════════════════════════════════════════════
-
-app.get('/api/user/:username', (req, res) => {
-    const user = db.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
-    if (!user) return res.status(404).json({ error: 'Not found' });
-
-    const owned = user.inventory.map(id => db.products.find(p => p.id === id)).filter(Boolean);
-    const sold = db.products.filter(p => p.sellerId === user.id);
-    const tx = db.transactions.filter(t => t.oderId === user.id).reverse().slice(0, 30);
-
-    const { passwordHash, ...safeUser } = user;
-
-    res.json({
-        ...safeUser,
-        ownedProducts: owned,
-        soldProducts: sold,
-        transactions: tx,
-        stats: {
-            products: sold.length,
-            sales: sold.reduce((s, p) => s + p.downloads, 0),
-            earned: sold.reduce((s, p) => s + p.price * p.downloads, 0),
-            purchases: owned.length
-        }
-    });
+    res.json({ success: true, comment });
 });
 
+app.get('/api/comments/:productId', (req, res) => {
+    const comments = db.comments.filter(c => c.productId === req.params.productId);
+    res.json(comments);
+});
+
+// API для рейтингов
+app.post('/api/ratings/add', (req, res) => {
+    const { username, productId, score } = req.body;
+    const user = db.users.find(u => u.username === username);
+
+    if (!user || !productId || !score || score < 1 || score > 5) {
+        return res.status(400).json({ error: "Некорректные данные" });
+    }
+
+    const existingRating = db.ratings.find(r => r.userId === user.id && r.productId === productId);
+    if (existingRating) {
+        return res.status(400).json({ error: "Вы уже оценивали этот товар" });
+    }
+
+    const rating = {
+        id: Date.now().toString(),
+        productId,
+        userId: user.id,
+        score,
+        createdAt: new Date().toISOString(),
+    };
+
+    db.ratings.push(rating);
+    saveDB();
+    res.json({ success: true, rating });
+});
+
+app.get('/api/ratings/:productId', (req, res) => {
+    const ratings = db.ratings.filter(r => r.productId === req.params.productId);
+    const averageScore = ratings.length > 0
+        ? ratings.reduce((sum, r) => sum + r.score, 0) / ratings.length
+        : 0;
+    res.json({ ratings, averageScore });
+});
+
+// API для чатов
+app.post('/api/chats/create', (req, res) => {
+    const { user1Id, user2Id } = req.body;
+
+    if (!user1Id || !user2Id) {
+        return res.status(400).json({ error: "Некорректные данные" });
+    }
+
+    const existingChat = db.chats.find(c =>
+        c.participants.includes(user1Id) && c.participants.includes(user2Id)
+    );
+
+    if (existingChat) {
+        return res.json({ success: true, chat: existingChat });
+    }
+
+    const chat = {
+        id: Date.now().toString(),
+        participants: [user1Id, user2Id],
+        messages: [],
+    };
+
+    db.chats.push(chat);
+    saveDB();
+    res.json({ success: true, chat });
+});
+
+app.post('/api/chats/send', (req, res) => {
+    const { chatId, senderId, text } = req.body;
+
+    if (!chatId || !senderId || !text) {
+        return res.status(400).json({ error: "Некорректные данные" });
+    }
+
+    const chat = db.chats.find(c => c.id === chatId);
+    if (!chat) {
+        return res.status(404).json({ error: "Чат не найден" });
+    }
+
+    const message = {
+        id: Date.now().toString(),
+        senderId,
+        text,
+        createdAt: new Date().toISOString(),
+    };
+
+    chat.messages.push(message);
+    saveDB();
+    res.json({ success: true, message });
+});
+
+app.get('/api/chats/:userId', (req, res) => {
+    const userId = req.params.userId;
+    const chats = db.chats.filter(c => c.participants.includes(userId));
+    res.json(chats);
+});
+
+// API для товаров
 app.get('/api/products', (req, res) => {
     const { category, search, sort } = req.query;
     let result = [...db.products];
@@ -553,7 +693,7 @@ app.get('/api/products', (req, res) => {
         const s = search.toLowerCase();
         result = result.filter(p => p.title.toLowerCase().includes(s) || p.description.toLowerCase().includes(s));
     }
-    
+
     if (sort === 'price-low') result.sort((a, b) => a.price - b.price);
     else if (sort === 'price-high') result.sort((a, b) => b.price - a.price);
     else if (sort === 'popular') result.sort((a, b) => b.downloads - a.downloads);
@@ -566,13 +706,14 @@ app.get('/api/products', (req, res) => {
     })));
 });
 
+// API для публикации товара
 app.post('/api/publish', upload.single('file'), (req, res) => {
     const { username, title, description, price, category } = req.body;
     const user = db.users.find(u => u.username === username);
     if (!user) return res.status(403).json({ error: 'Unauthorized' });
 
     const colors = { BOT: '6366f1', WEB: '22c55e', SCRIPT: 'f59e0b', API: 'ec4899' };
-    
+
     const product = {
         id: Date.now().toString(),
         title, description,
@@ -585,17 +726,18 @@ app.post('/api/publish', upload.single('file'), (req, res) => {
         file: req.file ? req.file.filename : null,
         preview: `https://placehold.co/600x400/${colors[category] || '8b5cf6'}/fff?text=${encodeURIComponent(title.substring(0, 12))}&font=roboto`,
         downloads: 0,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
     };
-    
+
     db.products.push(product);
     user.myProducts.push(product.id);
     saveDB();
-    
+
     console.log(`📦 New: ${title} by ${username}`);
     res.json({ success: true });
 });
 
+// API для покупки товара
 app.post('/api/buy', (req, res) => {
     const { username, productId } = req.body;
     const user = db.users.find(u => u.username === username);
@@ -614,14 +756,14 @@ app.post('/api/buy', (req, res) => {
     if (seller) {
         seller.balance += product.price;
         seller.earned = (seller.earned || 0) + product.price;
-        
+
         db.transactions.push({
             id: Date.now().toString(),
-            oderId: seller.id,
+            userId: seller.id,
             type: 'sale',
             amount: product.price,
             desc: `💰 ${product.title}`,
-            date: new Date().toISOString()
+            date: new Date().toISOString(),
         });
 
         if (seller.telegramId) {
@@ -633,11 +775,11 @@ app.post('/api/buy', (req, res) => {
 
     db.transactions.push({
         id: (Date.now() + 1).toString(),
-        oderId: user.id,
+        userId: user.id,
         type: 'purchase',
         amount: -product.price,
         desc: `🛒 ${product.title}`,
-        date: new Date().toISOString()
+        date: new Date().toISOString(),
     });
 
     saveDB();
@@ -645,23 +787,44 @@ app.post('/api/buy', (req, res) => {
     res.json({ success: true, balance: user.balance });
 });
 
+// API для избранного
 app.post('/api/favorite', (req, res) => {
     const { username, productId } = req.body;
     const user = db.users.find(u => u.username === username);
     if (!user) return res.status(404).json({ error: 'Not found' });
 
-    const idx = db.favorites.findIndex(f => f.oderId === user.id && f.productId === productId);
+    const idx = db.favorites.findIndex(f => f.userId === user.id && f.productId === productId);
     if (idx > -1) { db.favorites.splice(idx, 1); res.json({ favorited: false }); }
-    else { db.favorites.push({ oderId: user.id, productId }); res.json({ favorited: true }); }
+    else { db.favorites.push({ userId: user.id, productId }); res.json({ favorited: true }); }
     saveDB();
 });
 
-app.get('/api/favorites/:username', (req, res) => {
-    const user = db.users.find(u => u.username === req.params.username);
-    if (!user) return res.json([]);
-    res.json(db.favorites.filter(f => f.oderId === user.id).map(f => db.products.find(p => p.id === f.productId)).filter(Boolean));
+// API для профиля пользователя
+app.get('/api/user/:username', (req, res) => {
+    const user = db.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
+    if (!user) return res.status(404).json({ error: 'Not found' });
+
+    const owned = user.inventory.map(id => db.products.find(p => p.id === id)).filter(Boolean);
+    const sold = db.products.filter(p => p.sellerId === user.id);
+    const tx = db.transactions.filter(t => t.userId === user.id).reverse().slice(0, 30);
+
+    const { passwordHash, ...safeUser } = user;
+
+    res.json({
+        ...safeUser,
+        ownedProducts: owned,
+        soldProducts: sold,
+        transactions: tx,
+        stats: {
+            products: sold.length,
+            sales: sold.reduce((s, p) => s + p.downloads, 0),
+            earned: sold.reduce((s, p) => s + p.price * p.downloads, 0),
+            purchases: owned.length,
+        },
+    });
 });
 
+// API для загрузки файла
 app.get('/api/download/:productId', (req, res) => {
     const { username } = req.query;
     const user = db.users.find(u => u.username === username);
@@ -674,6 +837,7 @@ app.get('/api/download/:productId', (req, res) => {
     res.download(path.join(UPLOADS, product.file), product.title + path.extname(product.file));
 });
 
+// API для обновления профиля
 app.post('/api/profile', (req, res) => {
     const { username, displayName, bio } = req.body;
     const user = db.users.find(u => u.username === username);
@@ -685,9 +849,7 @@ app.post('/api/profile', (req, res) => {
     res.json({ success: true });
 });
 
-// ═══════════════════════════════════════════════════════════
-// HTML с проверкой сессии
-// ═══════════════════════════════════════════════════════════
+// HTML-страница
 const HTML = `<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -793,6 +955,16 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
 .row>*{flex:1}
 .file-area{border:2px dashed var(--border);padding:28px;text-align:center;border-radius:10px;color:var(--dim);margin-bottom:16px;cursor:pointer}
 .empty-state{text-align:center;padding:40px;color:var(--dim)}
+.comment{background:var(--card2);border-radius:10px;padding:12px;margin-bottom:12px}
+.comment strong{color:var(--accent)}
+.comment small{color:var(--dim);font-size:12px}
+.chat-preview{display:flex;align-items:center;gap:12px;padding:12px;background:var(--card2);border-radius:10px;margin-bottom:8px;cursor:pointer}
+.chat-window{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card);border-radius:16px;padding:20px;max-width:400px;width:100%;z-index:1000}
+.chat-header{margin-bottom:16px}
+.chat-messages{height:300px;overflow-y:auto;margin-bottom:12px}
+.message{background:var(--card2);border-radius:10px;padding:10px;margin-bottom:8px;max-width:80%}
+.message.sent{margin-left:auto;background:var(--accent)}
+.message.received{margin-right:auto}
 </style>
 </head>
 <body>
@@ -866,6 +1038,7 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
 </div>
 <div class="section"><h3>✏️ Редактировать</h3><input type="text" id="e-name" placeholder="Имя"><textarea id="e-bio" rows="2" placeholder="О себе"></textarea><button class="btn btn-primary" onclick="saveProfile()">Сохранить</button></div>
 <div class="section"><h3>📦 Покупки</h3><div id="owned" class="mini-grid"></div></div>
+<div class="section"><h3>💬 Чаты</h3><div id="user-chats"></div></div>
 <div class="section"><button class="btn btn-secondary" onclick="logout()">🚪 Выйти</button></div>
 </section>
 <section id="tab-wallet" class="tab">
@@ -917,12 +1090,22 @@ const toast=m=>{const t=$('toast');t.textContent=m;t.classList.add('show');setTi
 const fmt=n=>n.toLocaleString('ru')+' ₽';
 const esc=s=>{const d=document.createElement('div');d.textContent=s;return d.innerHTML};
 
+// Переключение между вкладками аутентификации
 function switchAuth(m,btn){document.querySelectorAll('.auth-tabs button').forEach(b=>b.classList.remove('active'));btn?.classList.add('active');document.querySelectorAll('.auth-panel').forEach(p=>p.classList.remove('active'));$('auth-'+m).classList.add('active');if(m==='register')showStep1()}
+
+// Переключение на регистрацию
 function switchToRegister(){document.querySelectorAll('.auth-tabs button')[1].click()}
+
+// Показать шаг 1 регистрации
 function showStep1(){$('reg-step1').classList.remove('hidden');$('reg-step2').classList.add('hidden');$('reg-step3').classList.add('hidden')}
+
+// Показать шаг 2 регистрации
 function showStep2(){$('reg-step1').classList.add('hidden');$('reg-step2').classList.remove('hidden');$('reg-step3').classList.add('hidden')}
+
+// Показать шаг 3 регистрации
 function showStep3(){$('reg-step1').classList.add('hidden');$('reg-step2').classList.add('hidden');$('reg-step3').classList.remove('hidden');$('reg-code').focus()}
 
+// Начать регистрацию
 async function startReg(){
     const u=$('reg-username').value.trim(),p=$('reg-password').value,p2=$('reg-password2').value;
     if(!u||!p||!p2)return toast('Заполните всё');
@@ -934,6 +1117,7 @@ async function startReg(){
     showStep2();
 }
 
+// Подтвердить регистрацию
 async function confirmReg(){
     const code=$('reg-code').value.trim().toUpperCase();
     if(!code||code.length!==6)return toast('6 символов');
@@ -946,6 +1130,7 @@ async function confirmReg(){
     toast('🎉 Добро пожаловать!');
 }
 
+// Вход по паролю
 async function loginPassword(){
     const u=$('login-username').value.trim(),p=$('login-password').value;
     if(!u||!p)return toast('Заполните');
@@ -957,17 +1142,245 @@ async function loginPassword(){
     onLogin();
 }
 
+// После успешного входа
 function onLogin(){$('auth').classList.add('hidden');$('app').classList.remove('hidden');updateUI();loadMarket();if(location.hash==='#wallet')document.querySelector('[data-tab="wallet"]').click()}
+
+// Выход
 function logout(){user=null;localStorage.removeItem('user');location.reload()}
+
+// Обновление UI
 function updateUI(){$('h-avatar').src=user.avatar;$('h-balance').textContent=fmt(user.balance)}
 
-// ПРОВЕРКА СЕССИИ ПРИ ЗАГРУЗКЕ
+// Загрузка маркетплейса
+async function loadMarket(){
+    const params=new URLSearchParams();
+    if($('f-search').value)params.append('search',$('f-search').value);
+    if($('f-cat').value!=='all')params.append('category',$('f-cat').value);
+    params.append('sort',$('f-sort').value);
+    const[prods,favs]=await Promise.all([fetch('/api/products?'+params).then(r=>r.json()),fetch('/api/favorites/'+user.username).then(r=>r.json())]);
+    favIds=favs.map(f=>f.id);
+    $('grid').innerHTML=prods.length?prods.map(p=>card(p)).join(''):'<div class="empty-state">Пусто</div>';
+}
+
+// Карточка товара
+function card(p){
+    const fav=favIds.includes(p.id);
+    return `
+        <div class="card" onclick="openProduct('${p.id}')">
+            <div class="card-img" style="background-image:url('${p.preview}')">
+                <span class="card-cat">${p.category}</span>
+                <button class="card-fav ${fav?'active':'"}' onclick="event.stopPropagation();toggleFav('${p.id}',this)">♥</button>
+            </div>
+            <div class="card-body">
+                <h3>${esc(p.title)}</h3>
+                <p>${esc(p.description||'')}</p>
+                <div class="card-footer">
+                    <span class="price">${fmt(p.price)}</span>
+                    <button class="btn btn-primary" onclick="event.stopPropagation();buy('${p.id}')">Купить</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+// Открыть товар
+async function openProduct(productId) {
+    const product = await fetch(`/api/products/${productId}`).then(r => r.json());
+    const comments = await fetch(`/api/comments/${productId}`).then(r => r.json());
+    const ratings = await fetch(`/api/ratings/${productId}`).then(r => r.json());
+
+    const productWindow = document.createElement('div');
+    productWindow.className = 'product-window';
+    productWindow.innerHTML = `
+        <div style="background:var(--card);padding:20px;border-radius:16px;max-width:500px;width:100%;margin:0 auto;">
+            <h2>${product.title}</h2>
+            <p>${product.description}</p>
+            <p>💰 ${fmt(product.price)}</p>
+            <p>📥 ${product.downloads} скачиваний</p>
+            <div class="product-ratings">
+                <span class="average-score">⭐ ${ratings.averageScore.toFixed(1)}</span>
+                <span class="ratings-count">(${ratings.ratings.length} оценок)</span>
+            </div>
+            <div class="product-comments" id="product-comments-${productId}">
+                ${comments.length > 0 ? comments.map(c => `
+                    <div class="comment">
+                        <strong>${c.username}:</strong>
+                        <p>${c.text}</p>
+                        <small>${new Date(c.createdAt).toLocaleString('ru-RU')}</small>
+                    </div>
+                `).join('') : '<p>Комментариев пока нет.</p>'}
+            </div>
+            <textarea class="comment-input" id="comment-input-${productId}" placeholder="Оставьте комментарий..."></textarea>
+            <button class="btn btn-primary" onclick="addComment('${productId}', '${user.username}')">Отправить</button>
+            <div style="margin-top:12px;display:flex;gap:8px;">
+                <button class="btn btn-primary" onclick="buy('${productId}')">Купить</button>
+                <button class="btn btn-secondary" onclick="document.querySelector('.product-window').remove()">Закрыть</button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(productWindow);
+}
+
+// Добавление комментария
+async function addComment(productId, username) {
+    const text = document.getElementById(`comment-input-${productId}`).value.trim();
+    if (!text) return;
+
+    const res = await fetch('/api/comments/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, productId, text }),
+    });
+
+    if (res.ok) {
+        document.getElementById(`comment-input-${productId}`).value = '';
+        openProduct(productId);
+    }
+}
+
+// Добавление рейтинга
+async function addRating(productId, username, score) {
+    const res = await fetch('/api/ratings/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, productId, score }),
+    });
+
+    if (res.ok) {
+        openProduct(productId);
+    }
+}
+
+// Покупка товара
+async function buy(id){if(!confirm('Купить?'))return;const r=await fetch('/api/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.username,productId:id})});const d=await r.json();if(r.ok){user.balance=d.balance;updateUI();toast('✅ Куплено!');loadMarket()}else toast(d.error)}
+
+// Добавление/удаление из избранного
+async function toggleFav(id,btn){const r=await fetch('/api/favorite',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.username,productId:id})});const d=await r.json();btn.classList.toggle('active',d.favorited)}
+
+// Загрузка избранного
+async function loadFavs(){const f=await fetch('/api/favorites/'+user.username).then(r=>r.json());$('favs-grid').innerHTML=f.length?f.map(p=>card(p)).join(''):'<div class="empty-state">Пусто</div>'}
+
+// Загрузка профиля
+async function loadProfile(){
+    const d=await fetch('/api/user/'+user.username).then(r=>r.json());
+    user={...user,...d};localStorage.setItem('user',JSON.stringify(user));updateUI();
+    $('p-avatar').src=d.avatar;$('p-name').textContent=d.displayName;$('p-bio').textContent=d.bio;
+    $('s-products').textContent=d.stats.products;$('s-sales').textContent=d.stats.sales;$('s-earned').textContent=fmt(d.stats.earned);
+    $('e-name').value=d.displayName;$('e-bio').value=d.bio;
+    $('owned').innerHTML=d.ownedProducts.length?d.ownedProducts.map(p=>'<div class="mini-card"><h4>'+esc(p.title)+'</h4><a href="/api/download/'+p.id+'?username='+user.username+'" class="btn btn-primary">📥</a></div>').join(''):'<div class="empty-state">Нет</div>';
+    loadUserChats(user.id);
+}
+
+// Сохранение профиля
+async function saveProfile(){await fetch('/api/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.username,displayName:$('e-name').value,bio:$('e-bio').value})});toast('✅');loadProfile()}
+
+// Загрузка кошелька
+async function loadWallet(){
+    const d=await fetch('/api/user/'+user.username).then(r=>r.json());
+    user.balance=d.balance;updateUI();
+    $('w-bal').textContent=fmt(d.balance);
+    $('tx').innerHTML=d.transactions.length?d.transactions.map(t=>'<div class="tx"><div><b>'+t.desc+'</b><br><small>'+new Date(t.date).toLocaleString('ru')+'</small></div><span class="'+(t.amount>0?'tx-plus':'tx-minus')+'">'+(t.amount>0?'+':'')+fmt(t.amount)+'</span></div>').join(''):'<div class="empty-state">Нет</div>';
+}
+
+// Выбор суммы пополнения
+function selAmt(a,btn){selAmount=a;$('custom-amount').value='';document.querySelectorAll('.amount-btn').forEach(b=>b.classList.remove('selected'));btn.classList.add('selected')}
+
+// Пополнение баланса
+$('custom-amount').addEventListener('input',function(){selAmount=Number(this.value)||0;document.querySelectorAll('.amount-btn').forEach(b=>b.classList.remove('selected'))});
+
+// Оплатить
+async function pay(){
+    const a=selAmount||Number($('custom-amount').value);
+    if(!a||a<10)return toast('Мин. 10₽');
+    const r=await fetch('/api/payment/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.username,amount:a})});
+    const d=await r.json();
+    if(!r.ok)return toast(d.error);
+    window.open(d.paymentUrl,'_blank');
+    toast('Оплата...');
+    const int=setInterval(async()=>{try{const s=await fetch('/api/payment/status/'+d.paymentId).then(r=>r.json());if(s.status==='completed'){clearInterval(int);toast('✅ Оплачено!');loadWallet()}}catch(e){}},4000);
+    setTimeout(()=>clearInterval(int),600000);
+}
+
+// Публикация товара
+async function publish(){
+    const t=$('u-title').value.trim(),pr=$('u-price').value,de=$('u-desc').value.trim();
+    if(!t||!pr||!de)return toast('Заполните');
+    const fd=new FormData();fd.append('username',user.username);fd.append('title',t);fd.append('price',pr);fd.append('description',de);fd.append('category',$('u-cat').value);
+    const f=$('u-file').files[0];if(f)fd.append('file',f);
+    const r=await fetch('/api/publish',{method:'POST',body:fd});
+    if(r.ok){toast('🚀 Готово!');$('u-title').value='';$('u-price').value='';$('u-desc').value='';document.querySelector('[data-tab="market"]').click()}
+}
+
+// Загрузка чатов пользователя
+async function loadUserChats(userId) {
+    const res = await fetch(`/api/chats/${userId}`);
+    const chats = await res.json();
+
+    const chatsContainer = document.getElementById('user-chats');
+    chatsContainer.innerHTML = chats.length > 0
+        ? chats.map(chat => {
+            const otherUserId = chat.participants.find(id => id !== userId);
+            const otherUser = db.users.find(u => u.id === otherUserId);
+            return `
+                <div class="chat-preview" onclick="openChat('${chat.id}')">
+                    <img src="${otherUser.avatar}" width="40" height="40">
+                    <span>${otherUser.username}</span>
+                </div>
+            `;
+        }).join('')
+        : '<p>У вас нет чатов.</p>';
+}
+
+// Открытие чата
+async function openChat(chatId) {
+    const res = await fetch(`/api/chats/${chatId}`);
+    const chat = await res.json();
+
+    const chatWindow = document.createElement('div');
+    chatWindow.className = 'chat-window';
+    chatWindow.innerHTML = `
+        <div class="chat-header">
+            <h3>Чат с ${chat.participants.find(id => id !== user.id)}</h3>
+        </div>
+        <div class="chat-messages" id="chat-messages-${chatId}">
+            ${chat.messages.map(msg => `
+                <div class="message ${msg.senderId === user.id ? 'sent' : 'received'}">
+                    <p>${msg.text}</p>
+                    <small>${new Date(msg.createdAt).toLocaleString('ru-RU')}</small>
+                </div>
+            `).join('')}
+        </div>
+        <input type="text" id="message-input-${chatId}" placeholder="Введите сообщение...">
+        <button onclick="sendMessage('${chatId}', '${user.id}')">Отправить</button>
+    `;
+
+    document.body.appendChild(chatWindow);
+}
+
+// Отправка сообщения
+async function sendMessage(chatId, senderId) {
+    const text = document.getElementById(`message-input-${chatId}`).value.trim();
+    if (!text) return;
+
+    const res = await fetch('/api/chats/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chatId, senderId, text }),
+    });
+
+    if (res.ok) {
+        document.getElementById(`message-input-${chatId}`).value = '';
+        openChat(chatId);
+    }
+}
+
+// Проверка сессии при загрузке
 (async function(){
     const saved=localStorage.getItem('user');
     if(saved){
         try{
             const u=JSON.parse(saved);
-            // Проверяем на сервере
             const r=await fetch('/api/auth/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u.username})});
             const d=await r.json();
             if(d.valid){
@@ -982,84 +1395,28 @@ function updateUI(){$('h-avatar').src=user.avatar;$('h-balance').textContent=fmt
     }
 })();
 
+// Переключение вкладок
 document.querySelectorAll('.nav a').forEach(a=>{a.onclick=e=>{e.preventDefault();document.querySelectorAll('.nav a').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));a.classList.add('active');$('tab-'+a.dataset.tab).classList.add('active');if(a.dataset.tab==='market')loadMarket();if(a.dataset.tab==='favs')loadFavs();if(a.dataset.tab==='profile')loadProfile();if(a.dataset.tab==='wallet')loadWallet()}});
+
+// Фильтры
 ['f-search','f-cat','f-sort'].forEach(id=>{$(id).addEventListener('input',loadMarket);$(id).addEventListener('change',loadMarket)});
-
-async function loadMarket(){
-    const params=new URLSearchParams();
-    if($('f-search').value)params.append('search',$('f-search').value);
-    if($('f-cat').value!=='all')params.append('category',$('f-cat').value);
-    params.append('sort',$('f-sort').value);
-    const[prods,favs]=await Promise.all([fetch('/api/products?'+params).then(r=>r.json()),fetch('/api/favorites/'+user.username).then(r=>r.json())]);
-    favIds=favs.map(f=>f.id);
-    $('grid').innerHTML=prods.length?prods.map(p=>card(p)).join(''):'<div class="empty-state">Пусто</div>';
-}
-
-function card(p){const fav=favIds.includes(p.id);return'<div class="card"><div class="card-img" style="background-image:url('+p.preview+')"><span class="card-cat">'+p.category+'</span><button class="card-fav '+(fav?'active':'')+'" onclick="event.stopPropagation();toggleFav(\\''+p.id+'\\',this)">♥</button></div><div class="card-body"><h3>'+esc(p.title)+'</h3><p>'+esc(p.description||'')+'</p><div class="card-footer"><span class="price">'+fmt(p.price)+'</span><button class="btn btn-primary" onclick="buy(\\''+p.id+'\\')">Купить</button></div></div></div>'}
-
-async function buy(id){if(!confirm('Купить?'))return;const r=await fetch('/api/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.username,productId:id})});const d=await r.json();if(r.ok){user.balance=d.balance;updateUI();toast('✅ Куплено!');loadMarket()}else toast(d.error)}
-async function toggleFav(id,btn){const r=await fetch('/api/favorite',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.username,productId:id})});const d=await r.json();btn.classList.toggle('active',d.favorited)}
-async function loadFavs(){const f=await fetch('/api/favorites/'+user.username).then(r=>r.json());$('favs-grid').innerHTML=f.length?f.map(p=>card(p)).join(''):'<div class="empty-state">Пусто</div>'}
-
-async function loadProfile(){
-    const d=await fetch('/api/user/'+user.username).then(r=>r.json());
-    user={...user,...d};localStorage.setItem('user',JSON.stringify(user));updateUI();
-    $('p-avatar').src=d.avatar;$('p-name').textContent=d.displayName;$('p-bio').textContent=d.bio;
-    $('s-products').textContent=d.stats.products;$('s-sales').textContent=d.stats.sales;$('s-earned').textContent=fmt(d.stats.earned);
-    $('e-name').value=d.displayName;$('e-bio').value=d.bio;
-    $('owned').innerHTML=d.ownedProducts.length?d.ownedProducts.map(p=>'<div class="mini-card"><h4>'+esc(p.title)+'</h4><a href="/api/download/'+p.id+'?username='+user.username+'" class="btn btn-primary">📥</a></div>').join(''):'<div class="empty-state">Нет</div>';
-}
-
-async function saveProfile(){await fetch('/api/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.username,displayName:$('e-name').value,bio:$('e-bio').value})});toast('✅');loadProfile()}
-
-async function loadWallet(){
-    const d=await fetch('/api/user/'+user.username).then(r=>r.json());
-    user.balance=d.balance;updateUI();
-    $('w-bal').textContent=fmt(d.balance);
-    $('tx').innerHTML=d.transactions.length?d.transactions.map(t=>'<div class="tx"><div><b>'+t.desc+'</b><br><small>'+new Date(t.date).toLocaleString('ru')+'</small></div><span class="'+(t.amount>0?'tx-plus':'tx-minus')+'">'+(t.amount>0?'+':'')+fmt(t.amount)+'</span></div>').join(''):'<div class="empty-state">Нет</div>';
-}
-
-function selAmt(a,btn){selAmount=a;$('custom-amount').value='';document.querySelectorAll('.amount-btn').forEach(b=>b.classList.remove('selected'));btn.classList.add('selected')}
-$('custom-amount').addEventListener('input',function(){selAmount=Number(this.value)||0;document.querySelectorAll('.amount-btn').forEach(b=>b.classList.remove('selected'))});
-
-async function pay(){
-    const a=selAmount||Number($('custom-amount').value);
-    if(!a||a<10)return toast('Мин. 10₽');
-    const r=await fetch('/api/payment/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.username,amount:a})});
-    const d=await r.json();
-    if(!r.ok)return toast(d.error);
-    window.open(d.paymentUrl,'_blank');
-    toast('Оплата...');
-    const int=setInterval(async()=>{try{const s=await fetch('/api/payment/status/'+d.paymentId).then(r=>r.json());if(s.status==='completed'){clearInterval(int);toast('✅ Оплачено!');loadWallet()}}catch(e){}},4000);
-    setTimeout(()=>clearInterval(int),600000);
-}
-
-async function publish(){
-    const t=$('u-title').value.trim(),pr=$('u-price').value,de=$('u-desc').value.trim();
-    if(!t||!pr||!de)return toast('Заполните');
-    const fd=new FormData();fd.append('username',user.username);fd.append('title',t);fd.append('price',pr);fd.append('description',de);fd.append('category',$('u-cat').value);
-    const f=$('u-file').files[0];if(f)fd.append('file',f);
-    const r=await fetch('/api/publish',{method:'POST',body:fd});
-    if(r.ok){toast('🚀 Готово!');$('u-title').value='';$('u-price').value='';$('u-desc').value='';document.querySelector('[data-tab="market"]').click()}
-}
 </script>
 </body>
 </html>`;
 
+// Главная страница
 app.get('/', (req, res) => res.send(HTML));
 
-// ═══════════════════════════════════════════════════════════
-// ЗАПУСК
-// ═══════════════════════════════════════════════════════════
+// Запуск сервера
 app.listen(PORT, async () => {
-    console.log('═══════════════════════════════════════');
+    console.log('═══════════════════════════════════════════════════════════');
     console.log('🚀 CodeVault started on port', PORT);
     console.log('🌐', DOMAIN);
     console.log('💳 Wallet:', YOOMONEY_WALLET);
     console.log('👥 Users:', db.users.length);
     console.log('📦 Products:', db.products.length);
-    console.log('═══════════════════════════════════════');
-    
+    console.log('═══════════════════════════════════════════════════════════');
+
     try {
         const r = await fetch(TELEGRAM_API + '/setWebhook?url=' + DOMAIN + WEBHOOK_PATH);
         const d = await r.json();
