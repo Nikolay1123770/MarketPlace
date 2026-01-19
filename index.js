@@ -11,6 +11,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN || '8035930401:AAH4bICwB8LVXApFEIaLmOlsY
 const PORT = process.env.PORT || 3000;
 const WEBHOOK_PATH = `/webhook/${BOT_TOKEN}`;
 const DOMAIN = process.env.DOMAIN || 'https://marketplacebot.bothost.ru';
+const BOT_USERNAME = 'RegisterMarketPlace_bot';
 
 const app = express();
 app.use(express.json());
@@ -35,10 +36,9 @@ let products = [];
 let transactions = [];
 let favorites = [];
 
-// Коды авторизации
-const authCodes = new Map();        // Для входа через TG
-const registerCodes = new Map();    // Для подтверждения регистрации
-const pendingRegistrations = new Map(); // Ожидающие регистрации
+// Коды для регистрации
+const registerCodes = new Map();
+const pendingRegistrations = new Map();
 
 // Хеширование пароля
 function hashPassword(password) {
@@ -46,7 +46,7 @@ function hashPassword(password) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// TELEGRAM WEBHOOK
+// TELEGRAM API
 // ═══════════════════════════════════════════════════════════
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
@@ -58,7 +58,7 @@ async function sendMessage(chatId, text, options = {}) {
             body: JSON.stringify({
                 chat_id: chatId,
                 text: text,
-                parse_mode: 'Markdown',
+                parse_mode: 'HTML',
                 ...options
             })
         });
@@ -67,20 +67,132 @@ async function sendMessage(chatId, text, options = {}) {
     }
 }
 
-app.post(WEBHOOK_PATH, (req, res) => {
+async function editMessage(chatId, messageId, text, options = {}) {
+    try {
+        await fetch(`${TELEGRAM_API}/editMessageText`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                chat_id: chatId,
+                message_id: messageId,
+                text: text,
+                parse_mode: 'HTML',
+                ...options
+            })
+        });
+    } catch (e) {
+        console.error('Telegram error:', e.message);
+    }
+}
+
+async function answerCallback(callbackId, text = '', showAlert = false) {
+    try {
+        await fetch(`${TELEGRAM_API}/answerCallbackQuery`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                callback_query_id: callbackId,
+                text: text,
+                show_alert: showAlert
+            })
+        });
+    } catch (e) {
+        console.error('Telegram error:', e.message);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// TELEGRAM WEBHOOK
+// ═══════════════════════════════════════════════════════════
+app.post(WEBHOOK_PATH, async (req, res) => {
     const { message, callback_query } = req.body;
     
     // Обработка callback кнопок
     if (callback_query) {
         const chatId = callback_query.message.chat.id;
+        const messageId = callback_query.message.message_id;
         const data = callback_query.data;
         const from = callback_query.from;
         
-        if (data.startsWith('confirm_reg_')) {
+        // Кнопка "Открыть сайт"
+        if (data === 'open_site') {
+            await answerCallback(callback_query.id, '🌐 Переход на сайт...');
+        }
+        
+        // Кнопка "Мой баланс"
+        else if (data === 'my_balance') {
+            const user = users.find(u => u.telegramId === from.id);
+            if (user) {
+                await answerCallback(callback_query.id);
+                await sendMessage(chatId, 
+                    `💎 <b>Ваш профиль</b>\n\n` +
+                    `👤 <b>${user.displayName}</b>\n` +
+                    `━━━━━━━━━━━━━━━\n\n` +
+                    `💰 Баланс: <b>${user.balance.toLocaleString()} ₽</b>\n` +
+                    `📦 Моих товаров: <b>${user.myProducts.length}</b>\n` +
+                    `🛒 Покупок: <b>${user.inventory.length}</b>\n` +
+                    `💵 Заработано: <b>${(user.earned || 0).toLocaleString()} ₽</b>\n\n` +
+                    `━━━━━━━━━━━━━━━`,
+                    {
+                        reply_markup: {
+                            inline_keyboard: [
+                                [{ text: '🌐 Открыть сайт', url: DOMAIN }],
+                                [{ text: '◀️ Назад в меню', callback_data: 'main_menu' }]
+                            ]
+                        }
+                    }
+                );
+            } else {
+                await answerCallback(callback_query.id, '❌ Вы не зарегистрированы', true);
+            }
+        }
+        
+        // Кнопка "Помощь"
+        else if (data === 'help') {
+            await answerCallback(callback_query.id);
+            await sendMessage(chatId,
+                `📚 <b>Справка по боту</b>\n\n` +
+                `━━━━━━━━━━━━━━━\n\n` +
+                `🔐 <b>Регистрация:</b>\n` +
+                `Зарегистрируйтесь на сайте, затем перейдите по ссылке из сайта в этого бота для подтверждения.\n\n` +
+                `🔑 <b>Вход:</b>\n` +
+                `Используйте логин и пароль на сайте.\n\n` +
+                `🛒 <b>Покупки:</b>\n` +
+                `Выбирайте товары на сайте и покупайте за баланс.\n\n` +
+                `💰 <b>Продажи:</b>\n` +
+                `Публикуйте свои товары и получайте уведомления о продажах.\n\n` +
+                `━━━━━━━━━━━━━━━`,
+                {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '🌐 Перейти на сайт', url: DOMAIN }],
+                            [{ text: '◀️ Назад в меню', callback_data: 'main_menu' }]
+                        ]
+                    }
+                }
+            );
+        }
+        
+        // Кнопка "Главное меню"
+        else if (data === 'main_menu') {
+            await answerCallback(callback_query.id);
+            const user = users.find(u => u.telegramId === from.id);
+            await showMainMenu(chatId, from, user);
+        }
+        
+        // Подтверждение регистрации
+        else if (data.startsWith('confirm_reg_')) {
             const regId = data.replace('confirm_reg_', '');
             const pending = pendingRegistrations.get(regId);
             
             if (pending) {
+                // Проверяем, не привязан ли уже этот TG
+                const existingTg = users.find(u => u.telegramId === from.id);
+                if (existingTg) {
+                    await answerCallback(callback_query.id, '⚠️ Telegram уже привязан к аккаунту!', true);
+                    return res.sendStatus(200);
+                }
+                
                 // Генерируем код подтверждения
                 const code = Math.random().toString(36).substring(2, 8).toUpperCase();
                 
@@ -96,34 +208,27 @@ app.post(WEBHOOK_PATH, (req, res) => {
                 // Удаляем через 10 минут
                 setTimeout(() => registerCodes.delete(code), 10 * 60 * 1000);
                 
-                sendMessage(chatId,
-                    `✅ *Подтверждение регистрации*\n\n` +
-                    `👤 Аккаунт: *${pending.username}*\n\n` +
-                    `🔐 Ваш код подтверждения:\n\n` +
-                    `\`${code}\`\n\n` +
-                    `📋 Скопируйте код и вставьте на сайте\n\n` +
-                    `⏱ Код действует 10 минут`
-                );
+                await answerCallback(callback_query.id, '✅ Код создан!');
                 
-                // Ответ на callback
-                fetch(`${TELEGRAM_API}/answerCallbackQuery`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        callback_query_id: callback_query.id,
-                        text: 'Код отправлен!'
-                    })
-                });
+                await editMessage(chatId, messageId,
+                    `✅ <b>Код подтверждения создан!</b>\n\n` +
+                    `━━━━━━━━━━━━━━━\n\n` +
+                    `👤 Аккаунт: <b>${pending.username}</b>\n\n` +
+                    `🔐 Ваш код:\n\n` +
+                    `<code>${code}</code>\n\n` +
+                    `━━━━━━━━━━━━━━━\n\n` +
+                    `📋 Скопируйте код (нажмите на него) и вставьте на сайте\n\n` +
+                    `⏱ Код действует <b>10 минут</b>`,
+                    {
+                        reply_markup: {
+                            inline_keyboard: [
+                                [{ text: '🌐 Открыть сайт', url: DOMAIN }]
+                            ]
+                        }
+                    }
+                );
             } else {
-                fetch(`${TELEGRAM_API}/answerCallbackQuery`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        callback_query_id: callback_query.id,
-                        text: 'Регистрация устарела. Начните заново.',
-                        show_alert: true
-                    })
-                });
+                await answerCallback(callback_query.id, '❌ Регистрация устарела. Начните заново.', true);
             }
         }
         
@@ -136,79 +241,169 @@ app.post(WEBHOOK_PATH, (req, res) => {
     const text = message.text;
     const from = message.from;
 
-    if (text === '/start') {
-        sendMessage(chatId,
-            `👋 Привет, *${from.first_name}*!\n\n` +
-            `🛒 *CodeVault Marketplace*\n\n` +
-            `Команды:\n` +
-            `/login — Код для входа\n` +
-            `/balance — Баланс\n` +
-            `/site — Открыть сайт\n\n` +
-            `🌐 ${DOMAIN}`
-        );
-    }
-    else if (text === '/login') {
-        const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    // Обработка deep link регистрации
+    if (text.startsWith('/start reg_')) {
+        const regId = text.replace('/start reg_', '');
+        const pending = pendingRegistrations.get(regId);
         
-        authCodes.set(code, {
-            telegramId: from.id,
-            username: from.username || `user_${from.id}`,
-            firstName: from.first_name,
-            createdAt: Date.now()
-        });
+        if (pending) {
+            // Проверяем, не привязан ли уже этот TG к другому аккаунту
+            const existingTg = users.find(u => u.telegramId === from.id);
+            if (existingTg) {
+                await sendMessage(chatId,
+                    `⚠️ <b>Telegram уже привязан!</b>\n\n` +
+                    `Этот Telegram уже используется для аккаунта <b>${existingTg.username}</b>\n\n` +
+                    `Используйте другой Telegram или войдите в существующий аккаунт.`,
+                    {
+                        reply_markup: {
+                            inline_keyboard: [
+                                [{ text: '🌐 Войти на сайте', url: DOMAIN }]
+                            ]
+                        }
+                    }
+                );
+                return res.sendStatus(200);
+            }
+            
+            await sendMessage(chatId,
+                `📝 <b>Подтверждение регистрации</b>\n\n` +
+                `━━━━━━━━━━━━━━━\n\n` +
+                `Вы регистрируете аккаунт:\n\n` +
+                `👤 Логин: <b>${pending.username}</b>\n\n` +
+                `━━━━━━━━━━━━━━━\n\n` +
+                `Нажмите кнопку ниже, чтобы получить код подтверждения:`,
+                {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '✅ Получить код подтверждения', callback_data: `confirm_reg_${regId}` }],
+                            [{ text: '❌ Отмена', callback_data: 'main_menu' }]
+                        ]
+                    }
+                }
+            );
+        } else {
+            await sendMessage(chatId,
+                `❌ <b>Ссылка устарела</b>\n\n` +
+                `Регистрация не найдена или истекла.\n\n` +
+                `Начните регистрацию заново на сайте.`,
+                {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '🌐 Перейти на сайт', url: DOMAIN }],
+                            [{ text: '◀️ Главное меню', callback_data: 'main_menu' }]
+                        ]
+                    }
+                }
+            );
+        }
+        return res.sendStatus(200);
+    }
 
-        setTimeout(() => authCodes.delete(code), 5 * 60 * 1000);
-
-        sendMessage(chatId,
-            `🔐 *Код для входа:*\n\n\`${code}\`\n\n⏱ Действует 5 минут\n\n🌐 ${DOMAIN}`
+    // Команда /start
+    if (text === '/start') {
+        const user = users.find(u => u.telegramId === from.id);
+        await showMainMenu(chatId, from, user);
+    }
+    
+    // Команда /help
+    else if (text === '/help') {
+        await sendMessage(chatId,
+            `📚 <b>Справка по боту</b>\n\n` +
+            `━━━━━━━━━━━━━━━\n\n` +
+            `🔐 <b>Регистрация:</b>\n` +
+            `Зарегистрируйтесь на сайте, затем подтвердите через бота.\n\n` +
+            `🔑 <b>Вход:</b>\n` +
+            `Используйте логин и пароль на сайте.\n\n` +
+            `━━━━━━━━━━━━━━━`,
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '🌐 Перейти на сайт', url: DOMAIN }],
+                        [{ text: '◀️ Главное меню', callback_data: 'main_menu' }]
+                    ]
+                }
+            }
         );
     }
+    
+    // Команда /balance
     else if (text === '/balance') {
         const user = users.find(u => u.telegramId === from.id);
         if (user) {
-            sendMessage(chatId,
-                `💰 *Баланс:* ${user.balance} ₽\n📦 Товаров: ${user.myProducts.length}\n🛒 Покупок: ${user.inventory.length}`
+            await sendMessage(chatId,
+                `💰 <b>Ваш баланс:</b> ${user.balance.toLocaleString()} ₽\n\n` +
+                `📦 Товаров: ${user.myProducts.length}\n` +
+                `🛒 Покупок: ${user.inventory.length}`,
+                {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '🌐 Открыть сайт', url: DOMAIN }]
+                        ]
+                    }
+                }
             );
         } else {
-            sendMessage(chatId, `❌ Вы не зарегистрированы\n\nИспользуйте /login или зарегистрируйтесь на сайте`);
+            await sendMessage(chatId, `❌ Вы не зарегистрированы\n\nЗарегистрируйтесь на сайте: ${DOMAIN}`);
         }
-    }
-    else if (text === '/site') {
-        sendMessage(chatId, `🌐 *CodeVault*\n\n${DOMAIN}`, {
-            reply_markup: { inline_keyboard: [[{ text: '🛒 Открыть', url: DOMAIN }]] }
-        });
-    }
-    else if (text === '/help') {
-        sendMessage(chatId,
-            `📚 *Команды:*\n\n/login — Код входа\n/balance — Баланс\n/site — Сайт\n/help — Справка`
-        );
     }
 
     res.sendStatus(200);
 });
 
+// Показать главное меню
+async function showMainMenu(chatId, from, user) {
+    if (user) {
+        // Пользователь зарегистрирован
+        await sendMessage(chatId,
+            `🎉 <b>Добро пожаловать, ${from.first_name}!</b>\n\n` +
+            `━━━━━━━━━━━━━━━\n\n` +
+            `🛒 <b>CodeVault Marketplace</b>\n\n` +
+            `Маркетплейс цифровых товаров:\n` +
+            `боты, скрипты, веб-приложения и API\n\n` +
+            `━━━━━━━━━━━━━━━\n\n` +
+            `💰 Ваш баланс: <b>${user.balance.toLocaleString()} ₽</b>\n` +
+            `📦 Товаров: <b>${user.myProducts.length}</b>\n` +
+            `🛒 Покупок: <b>${user.inventory.length}</b>`,
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '🌐 Открыть маркетплейс', url: DOMAIN }],
+                        [{ text: '💰 Мой баланс', callback_data: 'my_balance' }, { text: '❓ Помощь', callback_data: 'help' }]
+                    ]
+                }
+            }
+        );
+    } else {
+        // Пользователь не зарегистрирован
+        await sendMessage(chatId,
+            `👋 <b>Привет, ${from.first_name}!</b>\n\n` +
+            `━━━━━━━━━━━━━━━\n\n` +
+            `🛒 <b>CodeVault Marketplace</b>\n\n` +
+            `Маркетплейс цифровых товаров:\n` +
+            `• 🤖 Telegram-боты\n` +
+            `• 🌐 Веб-приложения\n` +
+            `• 📜 Скрипты и утилиты\n` +
+            `• 🔌 API и интеграции\n\n` +
+            `━━━━━━━━━━━━━━━\n\n` +
+            `📝 Зарегистрируйтесь на сайте, чтобы:\n` +
+            `• Покупать и продавать товары\n` +
+            `• Получать уведомления о продажах\n` +
+            `• Отслеживать баланс`,
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '🚀 Перейти на сайт', url: DOMAIN }],
+                        [{ text: '❓ Помощь', callback_data: 'help' }]
+                    ]
+                }
+            }
+        );
+    }
+}
+
 // ═══════════════════════════════════════════════════════════
 // API
 // ═══════════════════════════════════════════════════════════
-
-// Вход через код Telegram (быстрый вход)
-app.post('/api/auth/telegram', (req, res) => {
-    const { code } = req.body;
-    if (!code) return res.status(400).json({ error: 'Код не указан' });
-    
-    const auth = authCodes.get(code.toUpperCase());
-    if (!auth) return res.status(401).json({ error: 'Неверный или устаревший код' });
-    
-    authCodes.delete(code.toUpperCase());
-    
-    let user = users.find(u => u.telegramId === auth.telegramId);
-    if (!user) {
-        // Создаём пользователя без пароля (только TG вход)
-        user = createUser(auth.username, auth.telegramId, auth.firstName, null);
-        sendMessage(auth.telegramId, `✅ Вы вошли!\n💰 Баланс: ${user.balance} ₽`);
-    }
-    res.json({ user, token: user.id });
-});
 
 // Вход по логину и паролю
 app.post('/api/auth/login', (req, res) => {
@@ -225,17 +420,19 @@ app.post('/api/auth/login', (req, res) => {
     }
     
     if (!user.passwordHash) {
-        return res.status(401).json({ error: 'Аккаунт без пароля. Войдите через Telegram' });
+        return res.status(401).json({ error: 'Установите пароль через регистрацию' });
     }
     
     if (user.passwordHash !== hashPassword(password)) {
         return res.status(401).json({ error: 'Неверный пароль' });
     }
     
-    res.json({ user, token: user.id });
+    // Убираем passwordHash из ответа
+    const { passwordHash, ...safeUser } = user;
+    res.json({ user: safeUser, token: user.id });
 });
 
-// Шаг 1: Запрос на регистрацию (генерирует ссылку на бота)
+// Шаг 1: Запрос на регистрацию
 app.post('/api/auth/register/start', (req, res) => {
     const { username, password, confirmPassword } = req.body;
     
@@ -279,8 +476,7 @@ app.post('/api/auth/register/start', (req, res) => {
     setTimeout(() => pendingRegistrations.delete(regId), 15 * 60 * 1000);
     
     // Формируем ссылку на бота с deep link
-    const botUsername = 'RegisterMarketPlace_bot'; // Замените на username вашего бота
-    const botLink = `https://t.me/${botUsername}?start=reg_${regId}`;
+    const botLink = `https://t.me/${BOT_USERNAME}?start=reg_${regId}`;
     
     res.json({ 
         success: true, 
@@ -288,171 +484,6 @@ app.post('/api/auth/register/start', (req, res) => {
         botLink: botLink,
         message: 'Перейдите в бота для подтверждения'
     });
-});
-
-// Обработка deep link от бота
-app.post(WEBHOOK_PATH.replace('/webhook/', '/webhook-check/'), (req, res) => {
-    res.sendStatus(200);
-});
-
-// Обновляем обработчик /start для deep link
-const originalWebhook = app._router.stack.find(r => r.route && r.route.path === WEBHOOK_PATH);
-
-app.post(WEBHOOK_PATH, (req, res) => {
-    const { message, callback_query } = req.body;
-    
-    // Обработка callback кнопок
-    if (callback_query) {
-        const chatId = callback_query.message.chat.id;
-        const data = callback_query.data;
-        const from = callback_query.from;
-        
-        if (data.startsWith('confirm_reg_')) {
-            const regId = data.replace('confirm_reg_', '');
-            const pending = pendingRegistrations.get(regId);
-            
-            if (pending) {
-                const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-                
-                registerCodes.set(code, {
-                    regId: regId,
-                    telegramId: from.id,
-                    username: pending.username,
-                    passwordHash: pending.passwordHash,
-                    firstName: from.first_name,
-                    createdAt: Date.now()
-                });
-                
-                setTimeout(() => registerCodes.delete(code), 10 * 60 * 1000);
-                
-                sendMessage(chatId,
-                    `✅ *Код подтверждения регистрации*\n\n` +
-                    `👤 Аккаунт: *${pending.username}*\n\n` +
-                    `🔐 Ваш код:\n\n\`${code}\`\n\n` +
-                    `📋 Скопируйте и вставьте на сайте\n\n` +
-                    `⏱ Действует 10 минут`
-                );
-                
-                fetch(`${TELEGRAM_API}/answerCallbackQuery`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        callback_query_id: callback_query.id,
-                        text: 'Код отправлен!'
-                    })
-                });
-            } else {
-                fetch(`${TELEGRAM_API}/answerCallbackQuery`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        callback_query_id: callback_query.id,
-                        text: 'Регистрация устарела',
-                        show_alert: true
-                    })
-                });
-            }
-        }
-        
-        return res.sendStatus(200);
-    }
-    
-    if (!message || !message.text) return res.sendStatus(200);
-
-    const chatId = message.chat.id;
-    const text = message.text;
-    const from = message.from;
-
-    // Обработка deep link регистрации
-    if (text.startsWith('/start reg_')) {
-        const regId = text.replace('/start reg_', '');
-        const pending = pendingRegistrations.get(regId);
-        
-        if (pending) {
-            // Проверяем, не привязан ли уже этот TG к другому аккаунту
-            const existingTg = users.find(u => u.telegramId === from.id);
-            if (existingTg) {
-                sendMessage(chatId,
-                    `⚠️ *Telegram уже привязан*\n\n` +
-                    `Этот Telegram привязан к аккаунту *${existingTg.username}*\n\n` +
-                    `Войдите через /login или используйте другой Telegram`
-                );
-                return res.sendStatus(200);
-            }
-            
-            sendMessage(chatId,
-                `📝 *Подтверждение регистрации*\n\n` +
-                `Вы регистрируете аккаунт:\n` +
-                `👤 *${pending.username}*\n\n` +
-                `Нажмите кнопку ниже, чтобы получить код подтверждения:`,
-                {
-                    reply_markup: {
-                        inline_keyboard: [[
-                            { text: '✅ Получить код подтверждения', callback_data: `confirm_reg_${regId}` }
-                        ]]
-                    }
-                }
-            );
-        } else {
-            sendMessage(chatId,
-                `❌ *Ссылка устарела*\n\n` +
-                `Регистрация не найдена или истекла.\n` +
-                `Начните регистрацию заново на сайте.\n\n` +
-                `🌐 ${DOMAIN}`
-            );
-        }
-        return res.sendStatus(200);
-    }
-
-    if (text === '/start') {
-        sendMessage(chatId,
-            `👋 Привет, *${from.first_name}*!\n\n` +
-            `🛒 *CodeVault Marketplace*\n\n` +
-            `Команды:\n` +
-            `/login — Код для входа\n` +
-            `/balance — Баланс\n` +
-            `/site — Открыть сайт\n\n` +
-            `🌐 ${DOMAIN}`
-        );
-    }
-    else if (text === '/login') {
-        const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-        
-        authCodes.set(code, {
-            telegramId: from.id,
-            username: from.username || `user_${from.id}`,
-            firstName: from.first_name,
-            createdAt: Date.now()
-        });
-
-        setTimeout(() => authCodes.delete(code), 5 * 60 * 1000);
-
-        sendMessage(chatId,
-            `🔐 *Код для входа:*\n\n\`${code}\`\n\n⏱ Действует 5 минут\n\n🌐 ${DOMAIN}`
-        );
-    }
-    else if (text === '/balance') {
-        const user = users.find(u => u.telegramId === from.id);
-        if (user) {
-            sendMessage(chatId,
-                `💰 *Баланс:* ${user.balance} ₽\n📦 Товаров: ${user.myProducts.length}\n🛒 Покупок: ${user.inventory.length}`
-            );
-        } else {
-            sendMessage(chatId, `❌ Вы не зарегистрированы\n\nЗарегистрируйтесь на сайте: ${DOMAIN}`);
-        }
-    }
-    else if (text === '/site') {
-        sendMessage(chatId, `🌐 *CodeVault*\n\n${DOMAIN}`, {
-            reply_markup: { inline_keyboard: [[{ text: '🛒 Открыть', url: DOMAIN }]] }
-        });
-    }
-    else if (text === '/help') {
-        sendMessage(chatId,
-            `📚 *Команды:*\n\n/login — Код входа\n/balance — Баланс\n/site — Сайт\n/help — Справка`
-        );
-    }
-
-    res.sendStatus(200);
 });
 
 // Шаг 2: Подтверждение регистрации кодом
@@ -489,24 +520,23 @@ app.post('/api/auth/register/confirm', (req, res) => {
     
     // Уведомляем в Telegram
     sendMessage(regData.telegramId,
-        `🎉 *Регистрация завершена!*\n\n` +
-        `👤 Логин: *${user.username}*\n` +
-        `💰 Баланс: *${user.balance} ₽*\n\n` +
-        `Теперь вы можете входить по логину и паролю или через Telegram!\n\n` +
-        `🌐 ${DOMAIN}`
+        `🎉 <b>Регистрация завершена!</b>\n\n` +
+        `━━━━━━━━━━━━━━━\n\n` +
+        `👤 Логин: <b>${user.username}</b>\n` +
+        `💰 Баланс: <b>${user.balance.toLocaleString()} ₽</b>\n\n` +
+        `━━━━━━━━━━━━━━━\n\n` +
+        `Теперь вы можете покупать и продавать товары!`,
+        {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '🛒 Открыть маркетплейс', url: DOMAIN }]
+                ]
+            }
+        }
     );
     
-    res.json({ user, token: user.id });
-});
-
-// Устаревший простой вход (оставляем для совместимости)
-app.post('/api/auth', (req, res) => {
-    const { username } = req.body;
-    if (!username || !username.trim()) return res.status(400).json({ error: 'Нужен username' });
-    
-    let user = users.find(u => u.username.toLowerCase() === username.toLowerCase().trim());
-    if (!user) user = createUser(username.trim(), null, username.trim(), null);
-    res.json(user);
+    const { passwordHash, ...safeUser } = user;
+    res.json({ user: safeUser, token: user.id });
 });
 
 function createUser(username, telegramId, displayName, passwordHash) {
@@ -516,7 +546,7 @@ function createUser(username, telegramId, displayName, passwordHash) {
         username: username,
         passwordHash: passwordHash,
         displayName: displayName || username,
-        bio: 'Новый участник',
+        bio: 'Новый участник маркетплейса',
         avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`,
         balance: 5000,
         earned: 0,
@@ -651,7 +681,20 @@ app.post('/api/buy', (req, res) => {
 
         if (seller.telegramId) {
             sendMessage(seller.telegramId,
-                `🎉 *Продажа!*\n\n📦 ${product.title}\n👤 ${user.displayName}\n💰 +${product.price} ₽\n\nБаланс: ${seller.balance} ₽`
+                `🎉 <b>Новая продажа!</b>\n\n` +
+                `━━━━━━━━━━━━━━━\n\n` +
+                `📦 <b>${product.title}</b>\n` +
+                `👤 Покупатель: ${user.displayName}\n` +
+                `💰 Получено: <b>+${product.price.toLocaleString()} ₽</b>\n\n` +
+                `━━━━━━━━━━━━━━━\n\n` +
+                `💳 Новый баланс: <b>${seller.balance.toLocaleString()} ₽</b>`,
+                {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '🌐 Открыть маркетплейс', url: DOMAIN }]
+                        ]
+                    }
+                }
             );
         }
     }
@@ -702,7 +745,7 @@ app.post('/api/topup', (req, res) => {
         userId: user.id,
         type: 'deposit',
         amount: sum,
-        desc: 'Пополнение',
+        desc: 'Пополнение баланса',
         date: new Date().toISOString()
     });
 
@@ -741,229 +784,312 @@ const HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CodeVault</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<title>CodeVault — Маркетплейс</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0a0a0f;--card:#14141f;--border:#252535;--text:#e8e8e8;--dim:#707080;--accent:#6366f1;--green:#22c55e;--red:#ef4444}
+:root{--bg:#0a0a0f;--card:#12121a;--card2:#1a1a25;--border:#252535;--text:#e8e8e8;--dim:#707080;--accent:#6366f1;--accent2:#818cf8;--green:#22c55e;--red:#ef4444;--yellow:#eab308}
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
 .hidden{display:none!important}
-button{cursor:pointer;font-family:inherit;border:none}
-input,textarea,select{font-family:inherit;width:100%;background:var(--bg);border:1px solid var(--border);padding:12px;color:#fff;border-radius:8px;margin-bottom:12px}
-input:focus,textarea:focus{outline:none;border-color:var(--accent)}
+button{cursor:pointer;font-family:inherit;border:none;transition:all .2s}
+input,textarea,select{font-family:inherit;width:100%;background:var(--card2);border:1px solid var(--border);padding:14px 16px;color:#fff;border-radius:10px;margin-bottom:12px;font-size:14px;transition:all .2s}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(99,102,241,0.15)}
+input::placeholder{color:var(--dim)}
 
-.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(100px);background:var(--card);border:1px solid var(--accent);padding:12px 24px;border-radius:8px;opacity:0;transition:.3s;z-index:999}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(100px);background:var(--card);border:1px solid var(--accent);padding:14px 28px;border-radius:12px;opacity:0;transition:.3s;z-index:999;font-weight:500}
 .toast.show{transform:translateX(-50%) translateY(0);opacity:1}
 
-#auth{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px;z-index:100}
-.auth-box{width:100%;max-width:400px;text-align:center}
-.auth-box h1{font-size:2rem;color:var(--accent);margin-bottom:8px}
-.auth-box>p{color:var(--dim);margin-bottom:24px}
-.tabs{display:flex;gap:8px;margin-bottom:16px}
-.tabs button{flex:1;padding:10px;background:var(--card);color:var(--dim);border-radius:8px;font-size:13px}
-.tabs button.active{background:var(--accent);color:#fff}
-.auth-panel{display:none}
-.auth-panel.active{display:block}
-.steps{text-align:left;margin-bottom:16px}
-.step{display:flex;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);font-size:14px}
-.step b{color:var(--accent)}
-.step a{color:var(--accent)}
-.code-input{text-align:center;font-size:1.5rem;letter-spacing:6px;text-transform:uppercase}
-.btn{padding:12px 20px;border-radius:8px;font-weight:600}
-.btn-main{background:var(--accent);color:#fff;width:100%}
-.btn-main:hover{opacity:.9}
-.btn-secondary{background:var(--card);color:var(--text);width:100%;border:1px solid var(--border)}
-.btn-green{background:var(--green);color:#fff;width:100%}
-.divider{display:flex;align-items:center;gap:12px;margin:16px 0;color:var(--dim);font-size:13px}
-.divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--border)}
-.reg-step{margin-bottom:20px}
-.reg-step h3{font-size:14px;color:var(--accent);margin-bottom:12px;text-align:left}
-.input-group{position:relative}
-.input-group label{position:absolute;left:12px;top:-8px;background:var(--bg);padding:0 4px;font-size:11px;color:var(--dim)}
-.info-box{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:16px;text-align:left;font-size:13px}
-.info-box.success{border-color:var(--green);background:rgba(34,197,94,0.1)}
-.info-box.warning{border-color:var(--accent);background:rgba(99,102,241,0.1)}
-.back-link{color:var(--accent);font-size:13px;cursor:pointer;margin-top:12px;display:inline-block}
+/* AUTH SCREEN */
+#auth{position:fixed;inset:0;background:linear-gradient(135deg,#0a0a0f 0%,#12121a 100%);display:flex;align-items:center;justify-content:center;padding:20px;z-index:100}
+.auth-container{width:100%;max-width:420px}
+.auth-logo{text-align:center;margin-bottom:32px}
+.auth-logo h1{font-size:2.5rem;font-weight:800;background:linear-gradient(135deg,var(--accent),#a855f7);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px}
+.auth-logo p{color:var(--dim);font-size:14px}
 
+.auth-box{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;box-shadow:0 20px 50px rgba(0,0,0,0.3)}
+
+.auth-tabs{display:flex;gap:8px;margin-bottom:24px;background:var(--bg);padding:4px;border-radius:10px}
+.auth-tabs button{flex:1;padding:12px;background:transparent;color:var(--dim);border-radius:8px;font-size:14px;font-weight:600;transition:all .2s}
+.auth-tabs button.active{background:var(--accent);color:#fff}
+.auth-tabs button:hover:not(.active){color:var(--text)}
+
+.auth-panel{display:none}
+.auth-panel.active{display:block;animation:fadeIn .3s}
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+
+.form-group{margin-bottom:16px}
+.form-group label{display:block;font-size:13px;font-weight:500;color:var(--dim);margin-bottom:6px}
+.form-group input{margin:0}
+
+.btn{padding:14px 24px;border-radius:10px;font-weight:600;font-size:14px;display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%}
+.btn-primary{background:linear-gradient(135deg,var(--accent),#8b5cf6);color:#fff}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 10px 20px rgba(99,102,241,0.3)}
+.btn-secondary{background:var(--card2);color:var(--text);border:1px solid var(--border)}
+.btn-secondary:hover{border-color:var(--accent);color:var(--accent)}
+.btn-success{background:linear-gradient(135deg,var(--green),#16a34a);color:#fff}
+.btn-success:hover{transform:translateY(-2px);box-shadow:0 10px 20px rgba(34,197,94,0.3)}
+
+.divider{display:flex;align-items:center;gap:16px;margin:20px 0;color:var(--dim);font-size:13px}
+.divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--border)}
+
+/* Registration Steps */
+.reg-header{text-align:center;margin-bottom:24px}
+.reg-header h2{font-size:18px;margin-bottom:4px}
+.reg-header p{color:var(--dim);font-size:13px}
+
+.steps-indicator{display:flex;justify-content:center;gap:8px;margin-bottom:24px}
+.step-dot{width:10px;height:10px;border-radius:50%;background:var(--border);transition:all .3s}
+.step-dot.active{background:var(--accent);transform:scale(1.2)}
+.step-dot.done{background:var(--green)}
+
+.info-card{background:var(--card2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:20px}
+.info-card.highlight{border-color:var(--accent);background:rgba(99,102,241,0.1)}
+.info-card.success{border-color:var(--green);background:rgba(34,197,94,0.1)}
+.info-card h4{font-size:14px;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.info-card p{font-size:13px;color:var(--dim);line-height:1.5}
+.info-card .username{color:var(--accent);font-weight:600}
+
+.code-input{text-align:center;font-size:24px;letter-spacing:8px;text-transform:uppercase;font-weight:700;padding:16px}
+
+.back-link{color:var(--accent);font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;margin-top:16px}
+.back-link:hover{text-decoration:underline}
+
+/* MAIN APP */
 .app{display:flex;flex-direction:column;min-height:100vh}
 .header{background:var(--card);padding:16px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:50}
-.header h1{font-size:1.25rem;color:var(--accent)}
-.user{display:flex;align-items:center;gap:10px;font-size:14px}
-.user img{width:32px;height:32px;border-radius:50%}
-.user span{color:var(--green);font-weight:600}
+.header-logo{font-size:1.25rem;font-weight:800;background:linear-gradient(135deg,var(--accent),#a855f7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.header-user{display:flex;align-items:center;gap:12px}
+.header-balance{background:var(--card2);padding:6px 12px;border-radius:8px;font-size:13px;font-weight:600;color:var(--green)}
+.header-avatar{width:36px;height:36px;border-radius:50%;border:2px solid var(--accent)}
 
-.content{flex:1;padding:16px}
+.content{flex:1;padding:16px;padding-bottom:90px}
 .tab{display:none}
-.tab.active{display:block;animation:fade .3s}
-@keyframes fade{from{opacity:0}to{opacity:1}}
+.tab.active{display:block;animation:fadeIn .3s}
 
-.nav{display:flex;background:var(--card);border-top:1px solid var(--border);position:fixed;bottom:0;left:0;right:0;z-index:50}
-.nav a{flex:1;padding:12px 8px;text-align:center;color:var(--dim);text-decoration:none;font-size:11px;display:flex;flex-direction:column;align-items:center;gap:4px}
-.nav a svg{width:22px;height:22px}
+.nav{display:flex;background:var(--card);border-top:1px solid var(--border);position:fixed;bottom:0;left:0;right:0;z-index:50;padding:8px 0}
+.nav a{flex:1;padding:8px;text-align:center;color:var(--dim);text-decoration:none;font-size:11px;display:flex;flex-direction:column;align-items:center;gap:4px;transition:all .2s}
+.nav a svg{width:24px;height:24px}
 .nav a.active{color:var(--accent)}
+.nav a.active svg{stroke:var(--accent)}
 
-.filters{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.filters{display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap}
 .filters input{flex:1;min-width:150px;margin:0}
-.filters select{width:auto;min-width:100px;margin:0}
+.filters select{width:auto;min-width:110px;margin:0}
 
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;padding-bottom:80px}
-.card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden}
-.card-img{height:100px;background-size:cover;background-position:center;position:relative}
-.card-cat{position:absolute;top:6px;left:6px;background:rgba(0,0,0,.7);padding:2px 6px;border-radius:4px;font-size:10px}
-.card-fav{position:absolute;top:6px;right:6px;width:28px;height:28px;background:rgba(0,0,0,.6);border-radius:50%;color:#fff;font-size:14px;display:flex;align-items:center;justify-content:center}
-.card-fav.active{color:var(--red)}
-.card-body{padding:10px}
-.card-body h3{font-size:14px;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.card-body p{font-size:11px;color:var(--dim);margin-bottom:8px;height:28px;overflow:hidden}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;transition:all .2s}
+.card:hover{transform:translateY(-4px);border-color:var(--accent);box-shadow:0 10px 30px rgba(99,102,241,0.1)}
+.card-img{height:110px;background-size:cover;background-position:center;position:relative}
+.card-cat{position:absolute;top:8px;left:8px;background:rgba(0,0,0,.75);backdrop-filter:blur(4px);padding:4px 8px;border-radius:6px;font-size:10px;font-weight:600}
+.card-fav{position:absolute;top:8px;right:8px;width:32px;height:32px;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);border-radius:50%;color:#fff;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .2s}
+.card-fav:hover{background:var(--red)}
+.card-fav.active{color:var(--red);background:rgba(239,68,68,0.2)}
+.card-body{padding:12px}
+.card-body h3{font-size:14px;font-weight:600;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card-body p{font-size:12px;color:var(--dim);margin-bottom:10px;height:32px;overflow:hidden;line-height:1.4}
 .card-footer{display:flex;justify-content:space-between;align-items:center}
-.price{font-size:14px;font-weight:700;color:var(--green)}
-.card-footer .btn{padding:6px 12px;font-size:12px}
+.price{font-size:15px;font-weight:700;color:var(--green)}
+.card-footer .btn{padding:8px 14px;font-size:12px;width:auto}
 
-.profile-head{background:var(--card);padding:20px;border-radius:12px;text-align:center;margin-bottom:16px}
-.profile-head img{width:80px;height:80px;border-radius:50%;border:3px solid var(--accent);margin-bottom:12px}
-.profile-head h2{margin-bottom:4px}
-.profile-head p{color:var(--dim);font-size:13px;margin-bottom:16px}
-.stats{display:flex;justify-content:center;gap:24px}
+.profile-card{background:linear-gradient(135deg,var(--card) 0%,var(--card2) 100%);border:1px solid var(--border);padding:24px;border-radius:16px;text-align:center;margin-bottom:20px}
+.profile-card img{width:90px;height:90px;border-radius:50%;border:4px solid var(--accent);margin-bottom:16px}
+.profile-card h2{font-size:20px;margin-bottom:4px}
+.profile-card p{color:var(--dim);font-size:13px;margin-bottom:20px}
+.stats{display:flex;justify-content:center;gap:32px}
 .stat{text-align:center}
-.stat b{display:block;font-size:1.25rem;color:var(--accent)}
+.stat b{display:block;font-size:1.5rem;font-weight:800;color:var(--accent)}
 .stat span{font-size:11px;color:var(--dim)}
 
-.section{background:var(--card);padding:16px;border-radius:12px;margin-bottom:16px}
-.section h3{margin-bottom:12px;font-size:15px}
-.mini-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
-.mini-card{background:var(--bg);padding:12px;border-radius:8px;border:1px solid var(--border)}
-.mini-card h4{font-size:13px;margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.mini-card .btn{width:100%;padding:8px;font-size:12px}
+.section{background:var(--card);border:1px solid var(--border);padding:20px;border-radius:14px;margin-bottom:16px}
+.section h3{margin-bottom:16px;font-size:16px;font-weight:600}
+.mini-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+.mini-card{background:var(--card2);padding:14px;border-radius:10px;border:1px solid var(--border)}
+.mini-card h4{font-size:13px;margin-bottom:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mini-card .btn{padding:10px}
 
-.wallet-card{background:linear-gradient(135deg,var(--accent),#a855f7);padding:24px;border-radius:12px;text-align:center;margin-bottom:16px}
-.wallet-card small{opacity:.8}
-.wallet-card .amount{font-size:2.5rem;font-weight:800}
-.wallet-card .btns{display:flex;gap:8px;justify-content:center;margin-top:16px}
-.wallet-card .btn{background:rgba(255,255,255,.2);color:#fff;padding:10px 16px}
-.tx-list{background:var(--card);border-radius:12px;overflow:hidden}
-.tx{display:flex;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);font-size:13px}
+.wallet-card{background:linear-gradient(135deg,var(--accent),#a855f7);padding:28px;border-radius:16px;text-align:center;margin-bottom:20px;position:relative;overflow:hidden}
+.wallet-card::before{content:'';position:absolute;top:-50%;right:-50%;width:100%;height:100%;background:radial-gradient(circle,rgba(255,255,255,0.1) 0%,transparent 70%)}
+.wallet-card small{opacity:.85;font-size:13px}
+.wallet-card .amount{font-size:3rem;font-weight:800;margin:8px 0}
+.wallet-card .btns{display:flex;gap:10px;justify-content:center;margin-top:20px}
+.wallet-card .btn{background:rgba(255,255,255,.2);color:#fff;padding:12px 20px;width:auto;backdrop-filter:blur(4px)}
+.wallet-card .btn:hover{background:rgba(255,255,255,.3)}
+
+.tx-list{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+.tx{display:flex;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border);font-size:13px}
 .tx:last-child{border:none}
-.tx-plus{color:var(--green)}
-.tx-minus{color:var(--red)}
+.tx-info b{display:block;margin-bottom:2px}
+.tx-info small{color:var(--dim)}
+.tx-plus{color:var(--green);font-weight:700}
+.tx-minus{color:var(--red);font-weight:700}
 
-.upload-box{background:var(--card);padding:20px;border-radius:12px}
-.upload-box h2{margin-bottom:16px}
-.row{display:flex;gap:8px}
+.upload-box{background:var(--card);border:1px solid var(--border);padding:24px;border-radius:16px}
+.upload-box h2{margin-bottom:20px;font-size:18px}
+.row{display:flex;gap:10px}
 .row>*{flex:1}
-.file-area{border:2px dashed var(--border);padding:24px;text-align:center;border-radius:8px;color:var(--dim);margin-bottom:12px}
+.file-area{border:2px dashed var(--border);padding:28px;text-align:center;border-radius:10px;color:var(--dim);margin-bottom:16px;cursor:pointer;transition:all .2s}
+.file-area:hover{border-color:var(--accent);color:var(--accent)}
 
-.loading{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:spin 0.8s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
+.empty-state{text-align:center;padding:40px;color:var(--dim)}
+.empty-state svg{width:48px;height:48px;margin-bottom:12px;opacity:0.5}
 </style>
 </head>
 <body>
 
 <div class="toast" id="toast"></div>
 
+<!-- AUTH SCREEN -->
 <div id="auth">
-<div class="auth-box">
+<div class="auth-container">
+<div class="auth-logo">
 <h1>🛒 CodeVault</h1>
 <p>Маркетплейс цифровых товаров</p>
-
-<div class="tabs">
-<button class="active" onclick="switchAuth('login', this)">Вход</button>
-<button onclick="switchAuth('register', this)">Регистрация</button>
-<button onclick="switchAuth('tg', this)">Telegram</button>
 </div>
 
-<!-- ВХОД ПО ЛОГИНУ/ПАРОЛЮ -->
+<div class="auth-box">
+<div class="auth-tabs">
+<button class="active" onclick="switchAuth('login', this)">Вход</button>
+<button onclick="switchAuth('register', this)">Регистрация</button>
+</div>
+
+<!-- ВХОД -->
 <div id="auth-login" class="auth-panel active">
-<input type="text" id="login-username" placeholder="Логин">
-<input type="password" id="login-password" placeholder="Пароль">
-<button class="btn btn-main" onclick="loginPassword()">Войти</button>
-<div class="divider">или</div>
-<p style="font-size:13px;color:var(--dim)">Нет аккаунта? Переключитесь на вкладку "Регистрация"</p>
+<div class="form-group">
+<label>Логин</label>
+<input type="text" id="login-username" placeholder="Введите логин">
+</div>
+<div class="form-group">
+<label>Пароль</label>
+<input type="password" id="login-password" placeholder="Введите пароль">
+</div>
+<button class="btn btn-primary" onclick="loginPassword()">
+<span>Войти в аккаунт</span>
+</button>
+<div class="divider">нет аккаунта?</div>
+<button class="btn btn-secondary" onclick="switchToRegister()">Создать аккаунт</button>
 </div>
 
 <!-- РЕГИСТРАЦИЯ -->
 <div id="auth-register" class="auth-panel">
 
-<!-- Шаг 1: Ввод данных -->
-<div id="reg-step1" class="reg-step">
-<h3>📝 Шаг 1: Данные аккаунта</h3>
-<input type="text" id="reg-username" placeholder="Придумайте логин" maxlength="20">
-<input type="password" id="reg-password" placeholder="Придумайте пароль">
+<!-- Шаг 1 -->
+<div id="reg-step1">
+<div class="reg-header">
+<h2>Создание аккаунта</h2>
+<p>Шаг 1 из 3 — Данные для входа</p>
+</div>
+<div class="steps-indicator">
+<div class="step-dot active"></div>
+<div class="step-dot"></div>
+<div class="step-dot"></div>
+</div>
+<div class="form-group">
+<label>Придумайте логин</label>
+<input type="text" id="reg-username" placeholder="Например: developer_pro" maxlength="20">
+</div>
+<div class="form-group">
+<label>Придумайте пароль</label>
+<input type="password" id="reg-password" placeholder="Минимум 4 символа">
+</div>
+<div class="form-group">
+<label>Повторите пароль</label>
 <input type="password" id="reg-password2" placeholder="Повторите пароль">
-<button class="btn btn-main" onclick="startRegistration()">Получить код подтверждения</button>
+</div>
+<button class="btn btn-primary" onclick="startRegistration()">Продолжить →</button>
 </div>
 
-<!-- Шаг 2: Переход в бота -->
-<div id="reg-step2" class="reg-step hidden">
-<h3>📱 Шаг 2: Подтверждение в Telegram</h3>
-<div class="info-box warning">
-<b>👤 Логин:</b> <span id="reg-show-username"></span><br><br>
-Нажмите кнопку ниже, чтобы перейти в Telegram-бота и получить код подтверждения.
+<!-- Шаг 2 -->
+<div id="reg-step2" class="hidden">
+<div class="reg-header">
+<h2>Подтверждение</h2>
+<p>Шаг 2 из 3 — Переход в Telegram</p>
+</div>
+<div class="steps-indicator">
+<div class="step-dot done"></div>
+<div class="step-dot active"></div>
+<div class="step-dot"></div>
+</div>
+<div class="info-card highlight">
+<h4>👤 Ваш логин</h4>
+<p class="username" id="reg-show-username"></p>
+</div>
+<div class="info-card">
+<h4>📱 Что нужно сделать</h4>
+<p>Нажмите кнопку ниже, чтобы перейти в Telegram-бота. Там вы получите код подтверждения для завершения регистрации.</p>
 </div>
 <a id="reg-bot-link" href="#" target="_blank">
-<button class="btn btn-green">🤖 Открыть Telegram-бота</button>
+<button class="btn btn-success">🤖 Открыть Telegram-бота</button>
 </a>
-<div class="divider">после получения кода</div>
+<div class="divider">получили код?</div>
 <button class="btn btn-secondary" onclick="showStep3()">У меня есть код →</button>
-<span class="back-link" onclick="backToStep1()">← Назад</span>
+<span class="back-link" onclick="backToStep1()">← Изменить данные</span>
 </div>
 
-<!-- Шаг 3: Ввод кода -->
-<div id="reg-step3" class="reg-step hidden">
-<h3>🔐 Шаг 3: Введите код</h3>
-<div class="info-box success">
-Введите 6-значный код, который вы получили в Telegram-боте
+<!-- Шаг 3 -->
+<div id="reg-step3" class="hidden">
+<div class="reg-header">
+<h2>Введите код</h2>
+<p>Шаг 3 из 3 — Финальный шаг</p>
 </div>
+<div class="steps-indicator">
+<div class="step-dot done"></div>
+<div class="step-dot done"></div>
+<div class="step-dot active"></div>
+</div>
+<div class="info-card success">
+<h4>✅ Почти готово!</h4>
+<p>Введите 6-значный код, который вы получили в Telegram-боте</p>
+</div>
+<div class="form-group">
 <input type="text" id="reg-code" class="code-input" placeholder="XXXXXX" maxlength="6">
-<button class="btn btn-main" onclick="confirmRegistration()">Подтвердить регистрацию</button>
-<span class="back-link" onclick="showStep2()">← Назад к боту</span>
 </div>
-
-</div>
-
-<!-- ВХОД ЧЕРЕЗ TELEGRAM КОД -->
-<div id="auth-tg" class="auth-panel">
-<div class="steps">
-<div class="step"><b>1.</b> Откройте бота в Telegram</div>
-<div class="step"><b>2.</b> Отправьте команду /login</div>
-<div class="step"><b>3.</b> Введите полученный код ниже</div>
-</div>
-<input type="text" id="tg-code" class="code-input" placeholder="XXXXXX" maxlength="6">
-<button class="btn btn-main" onclick="loginTG()">Войти</button>
-<div class="divider">бот</div>
-<a href="http://t.me/RegisterMarketPlace_bot" target="_blank">
-<button class="btn btn-secondary">🤖 Открыть бота</button>
-</a>
+<button class="btn btn-primary" onclick="confirmRegistration()">🎉 Завершить регистрацию</button>
+<span class="back-link" onclick="showStep2()">← Вернуться к боту</span>
 </div>
 
 </div>
 </div>
+</div>
+</div>
 
+<!-- MAIN APP -->
 <div id="app" class="app hidden">
 <header class="header">
-<h1>CodeVault</h1>
-<div class="user">
-<span id="h-balance">0₽</span>
-<img id="h-avatar" src="">
+<div class="header-logo">CodeVault</div>
+<div class="header-user">
+<div class="header-balance" id="h-balance">0 ₽</div>
+<img class="header-avatar" id="h-avatar" src="">
 </div>
 </header>
 
 <div class="content">
 <section id="tab-market" class="tab active">
 <div class="filters">
-<input type="text" id="f-search" placeholder="Поиск...">
-<select id="f-cat"><option value="all">Все</option><option>BOT</option><option>WEB</option><option>SCRIPT</option></select>
-<select id="f-sort"><option value="newest">Новые</option><option value="popular">Популярные</option><option value="price-low">Дешевле</option></select>
+<input type="text" id="f-search" placeholder="🔍 Поиск товаров...">
+<select id="f-cat">
+<option value="all">Все категории</option>
+<option value="BOT">🤖 Боты</option>
+<option value="WEB">🌐 Веб</option>
+<option value="SCRIPT">📜 Скрипты</option>
+<option value="API">🔌 API</option>
+</select>
+<select id="f-sort">
+<option value="newest">Новые</option>
+<option value="popular">Популярные</option>
+<option value="price-low">Дешевле</option>
+<option value="price-high">Дороже</option>
+</select>
 </div>
 <div id="grid" class="grid"></div>
 </section>
 
 <section id="tab-favs" class="tab">
-<h2 style="margin-bottom:16px">Избранное</h2>
+<h2 style="margin-bottom:20px">❤️ Избранное</h2>
 <div id="favs-grid" class="grid"></div>
 </section>
 
 <section id="tab-profile" class="tab">
-<div class="profile-head">
+<div class="profile-card">
 <img id="p-avatar" src="">
 <h2 id="p-name"></h2>
 <p id="p-bio"></p>
@@ -974,13 +1100,13 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
 </div>
 </div>
 <div class="section">
-<h3>Редактировать</h3>
-<input type="text" id="e-name" placeholder="Имя">
+<h3>✏️ Редактировать профиль</h3>
+<input type="text" id="e-name" placeholder="Отображаемое имя">
 <textarea id="e-bio" rows="2" placeholder="О себе"></textarea>
-<button class="btn btn-main" onclick="saveProfile()">Сохранить</button>
+<button class="btn btn-primary" onclick="saveProfile()">Сохранить изменения</button>
 </div>
 <div class="section">
-<h3>Мои покупки</h3>
+<h3>📦 Мои покупки</h3>
 <div id="owned" class="mini-grid"></div>
 </div>
 <div class="section">
@@ -990,47 +1116,80 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
 
 <section id="tab-wallet" class="tab">
 <div class="wallet-card">
-<small>Баланс</small>
+<small>💳 Текущий баланс</small>
 <div class="amount" id="w-bal">0 ₽</div>
 <div class="btns">
-<button class="btn" onclick="topUp(1000)">+1K</button>
-<button class="btn" onclick="topUp(5000)">+5K</button>
-<button class="btn" onclick="topUp(10000)">+10K</button>
+<button class="btn" onclick="topUp(1000)">+1 000 ₽</button>
+<button class="btn" onclick="topUp(5000)">+5 000 ₽</button>
+<button class="btn" onclick="topUp(10000)">+10 000 ₽</button>
 </div>
 </div>
-<h3 style="margin-bottom:12px">История</h3>
+<h3 style="margin-bottom:14px">📋 История операций</h3>
 <div class="tx-list" id="tx"></div>
 </section>
 
 <section id="tab-upload" class="tab">
 <div class="upload-box">
-<h2>Новый товар</h2>
-<input type="text" id="u-title" placeholder="Название">
-<div class="row">
-<select id="u-cat"><option>BOT</option><option>WEB</option><option>SCRIPT</option><option>API</option></select>
-<input type="number" id="u-price" placeholder="Цена">
+<h2>📤 Новый товар</h2>
+<div class="form-group">
+<label>Название товара</label>
+<input type="text" id="u-title" placeholder="Например: Telegram Bot для парсинга">
 </div>
-<textarea id="u-desc" rows="3" placeholder="Описание"></textarea>
-<div class="file-area" onclick="document.getElementById('u-file').click()">📁 Выбрать файл</div>
+<div class="row">
+<div class="form-group">
+<label>Категория</label>
+<select id="u-cat">
+<option value="BOT">🤖 Бот</option>
+<option value="WEB">🌐 Веб</option>
+<option value="SCRIPT">📜 Скрипт</option>
+<option value="API">🔌 API</option>
+</select>
+</div>
+<div class="form-group">
+<label>Цена (₽)</label>
+<input type="number" id="u-price" placeholder="1000">
+</div>
+</div>
+<div class="form-group">
+<label>Описание</label>
+<textarea id="u-desc" rows="3" placeholder="Подробное описание вашего товара..."></textarea>
+</div>
+<div class="file-area" onclick="document.getElementById('u-file').click()">
+📁 Нажмите чтобы выбрать файл
+</div>
 <input type="file" id="u-file" hidden>
-<button class="btn btn-main" onclick="publish()">Опубликовать</button>
+<button class="btn btn-primary" onclick="publish()">🚀 Опубликовать товар</button>
 </div>
 </section>
 </div>
 
 <nav class="nav">
-<a href="#" class="active" data-tab="market"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>Маркет</a>
-<a href="#" data-tab="favs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>Избранное</a>
-<a href="#" data-tab="profile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="7" r="4"/><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/></svg>Профиль</a>
-<a href="#" data-tab="wallet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>Кошелёк</a>
-<a href="#" data-tab="upload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Продать</a>
+<a href="#" class="active" data-tab="market">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
+Маркет
+</a>
+<a href="#" data-tab="favs">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+Избранное
+</a>
+<a href="#" data-tab="profile">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="7" r="4"/><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/></svg>
+Профиль
+</a>
+<a href="#" data-tab="wallet">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+Кошелёк
+</a>
+<a href="#" data-tab="upload">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+Продать
+</a>
 </nav>
 </div>
 
 <script>
 let user = null;
 let favIds = [];
-let pendingRegId = null;
 
 const $ = id => document.getElementById(id);
 const toast = m => {
@@ -1039,30 +1198,30 @@ const toast = m => {
     t.classList.add('show');
     setTimeout(() => t.classList.remove('show'), 2500);
 };
-const fmt = n => new Intl.NumberFormat('ru-RU').format(n) + '₽';
+const fmt = n => new Intl.NumberFormat('ru-RU').format(n) + ' ₽';
 const esc = s => {
     const d = document.createElement('div');
     d.textContent = s;
     return d.innerHTML;
 };
 
-// Переключение вкладок авторизации
+// ═══════════════════════════════════════════════════════════
+// AUTH
+// ═══════════════════════════════════════════════════════════
+
 function switchAuth(m, btn) {
-    document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
+    document.querySelectorAll('.auth-tabs button').forEach(b => b.classList.remove('active'));
+    if (btn) btn.classList.add('active');
     document.querySelectorAll('.auth-panel').forEach(p => p.classList.remove('active'));
     $('auth-' + m).classList.add('active');
-    
-    // Сброс шагов регистрации
-    if (m === 'register') {
-        showStep1();
-    }
+    if (m === 'register') showStep1();
 }
 
-// ═══════════════════════════════════════════════════════════
-// РЕГИСТРАЦИЯ
-// ═══════════════════════════════════════════════════════════
+function switchToRegister() {
+    document.querySelectorAll('.auth-tabs button')[1].click();
+}
 
+// Registration Steps
 function showStep1() {
     $('reg-step1').classList.remove('hidden');
     $('reg-step2').classList.add('hidden');
@@ -1084,7 +1243,6 @@ function showStep3() {
 
 function backToStep1() {
     showStep1();
-    pendingRegId = null;
 }
 
 async function startRegistration() {
@@ -1100,26 +1258,17 @@ async function startRegistration() {
         const res = await fetch('/api/auth/register/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                username, 
-                password, 
-                confirmPassword: password2 
-            })
+            body: JSON.stringify({ username, password, confirmPassword: password2 })
         });
         
         const data = await res.json();
+        if (!res.ok) return toast(data.error);
         
-        if (!res.ok) {
-            return toast(data.error);
-        }
-        
-        pendingRegId = data.regId;
         $('reg-show-username').textContent = username;
         $('reg-bot-link').href = data.botLink;
         
         showStep2();
-        toast('Перейдите в бота!');
-        
+        toast('Переходите в бота!');
     } catch (e) {
         toast('Ошибка сети');
     }
@@ -1139,24 +1288,16 @@ async function confirmRegistration() {
         });
         
         const data = await res.json();
-        
-        if (!res.ok) {
-            return toast(data.error);
-        }
+        if (!res.ok) return toast(data.error);
         
         user = data.user;
         localStorage.setItem('user', JSON.stringify(user));
         onLogin();
-        toast('🎉 Регистрация успешна!');
-        
+        toast('🎉 Добро пожаловать!');
     } catch (e) {
         toast('Ошибка сети');
     }
 }
-
-// ═══════════════════════════════════════════════════════════
-// ВХОД
-// ═══════════════════════════════════════════════════════════
 
 async function loginPassword() {
     const username = $('login-username').value.trim();
@@ -1173,39 +1314,14 @@ async function loginPassword() {
         });
         
         const data = await res.json();
-        
-        if (!res.ok) {
-            return toast(data.error);
-        }
+        if (!res.ok) return toast(data.error);
         
         user = data.user;
         localStorage.setItem('user', JSON.stringify(user));
         onLogin();
-        
     } catch (e) {
         toast('Ошибка сети');
     }
-}
-
-async function loginTG() {
-    const code = $('tg-code').value.trim();
-    if (!code) return toast('Введи код');
-    
-    const res = await fetch('/api/auth/telegram', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code })
-    });
-    
-    if (!res.ok) {
-        const d = await res.json();
-        return toast(d.error);
-    }
-    
-    const data = await res.json();
-    user = data.user;
-    localStorage.setItem('user', JSON.stringify(user));
-    onLogin();
 }
 
 function onLogin() {
@@ -1220,22 +1336,11 @@ function logout() {
     if (!confirm('Выйти из аккаунта?')) return;
     user = null;
     localStorage.removeItem('user');
-    $('auth').classList.remove('hidden');
-    $('app').classList.add('hidden');
-    // Сброс форм
-    $('login-username').value = '';
-    $('login-password').value = '';
-    $('tg-code').value = '';
-    $('reg-username').value = '';
-    $('reg-password').value = '';
-    $('reg-password2').value = '';
-    $('reg-code').value = '';
-    showStep1();
-    toast('Вы вышли');
+    location.reload();
 }
 
-// Автовход при загрузке
-(function checkSavedUser() {
+// Auto login
+(function() {
     const saved = localStorage.getItem('user');
     if (saved) {
         try {
@@ -1253,7 +1358,7 @@ function updateUI() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// НАВИГАЦИЯ
+// NAVIGATION
 // ═══════════════════════════════════════════════════════════
 
 document.querySelectorAll('.nav a').forEach(a => {
@@ -1276,7 +1381,7 @@ document.querySelectorAll('.nav a').forEach(a => {
 });
 
 // ═══════════════════════════════════════════════════════════
-// МАРКЕТ
+// MARKET
 // ═══════════════════════════════════════════════════════════
 
 async function loadMarket() {
@@ -1295,28 +1400,29 @@ async function loadMarket() {
     favIds = favs.map(f => f.id);
 
     $('grid').innerHTML = prods.length === 0 
-        ? '<p style="color:var(--dim)">Пусто</p>' 
+        ? '<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg><p>Товары не найдены</p></div>' 
         : prods.map(p => renderCard(p)).join('');
 }
 
 function renderCard(p) {
     const isFav = favIds.includes(p.id);
+    const catIcons = { BOT: '🤖', WEB: '🌐', SCRIPT: '📜', API: '🔌' };
     return '<div class="card">' +
         '<div class="card-img" style="background-image:url(' + p.preview + ')">' +
-        '<span class="card-cat">' + p.category + '</span>' +
+        '<span class="card-cat">' + (catIcons[p.category] || '📦') + ' ' + p.category + '</span>' +
         '<button class="card-fav ' + (isFav ? 'active' : '') + '" onclick="event.stopPropagation();toggleFav(\\'' + p.id + '\\',this)">♥</button>' +
         '</div>' +
         '<div class="card-body">' +
         '<h3>' + esc(p.title) + '</h3>' +
-        '<p>' + esc(p.description || '') + '</p>' +
+        '<p>' + esc(p.description || 'Нет описания') + '</p>' +
         '<div class="card-footer">' +
         '<span class="price">' + fmt(p.price) + '</span>' +
-        '<button class="btn btn-main" onclick="buy(\\'' + p.id + '\\')">Купить</button>' +
+        '<button class="btn btn-primary" onclick="buy(\\'' + p.id + '\\')">Купить</button>' +
         '</div></div></div>';
 }
 
 async function buy(id) {
-    if (!confirm('Купить?')) return;
+    if (!confirm('Купить этот товар?')) return;
     const res = await fetch('/api/buy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1326,7 +1432,7 @@ async function buy(id) {
     if (res.ok) {
         user.balance = d.balance;
         updateUI();
-        toast('Куплено!');
+        toast('✅ Товар куплен!');
         loadMarket();
     } else {
         toast(d.error);
@@ -1349,12 +1455,12 @@ async function loadFavs() {
     const favs = await fetch('/api/favorites/' + user.username).then(r => r.json());
     favIds = favs.map(f => f.id);
     $('favs-grid').innerHTML = favs.length === 0 
-        ? '<p style="color:var(--dim)">Пусто</p>' 
+        ? '<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg><p>Нет избранных товаров</p></div>' 
         : favs.map(p => renderCard(p)).join('');
 }
 
 // ═══════════════════════════════════════════════════════════
-// ПРОФИЛЬ
+// PROFILE
 // ═══════════════════════════════════════════════════════════
 
 async function loadProfile() {
@@ -1373,9 +1479,9 @@ async function loadProfile() {
     $('e-bio').value = data.bio;
 
     $('owned').innerHTML = data.ownedProducts.length === 0 
-        ? '<p style="color:var(--dim)">Пусто</p>' 
+        ? '<div class="empty-state"><p>Нет покупок</p></div>' 
         : data.ownedProducts.map(p =>
-            '<div class="mini-card"><h4>' + esc(p.title) + '</h4><a href="/api/download/' + p.id + '?username=' + user.username + '" class="btn btn-main">Скачать</a></div>'
+            '<div class="mini-card"><h4>' + esc(p.title) + '</h4><a href="/api/download/' + p.id + '?username=' + user.username + '" class="btn btn-primary">📥 Скачать</a></div>'
         ).join('');
 }
 
@@ -1389,12 +1495,12 @@ async function saveProfile() {
             bio: $('e-bio').value
         })
     });
-    toast('Сохранено!');
+    toast('✅ Сохранено!');
     loadProfile();
 }
 
 // ═══════════════════════════════════════════════════════════
-// КОШЕЛЁК
+// WALLET
 // ═══════════════════════════════════════════════════════════
 
 async function loadWallet() {
@@ -1404,9 +1510,9 @@ async function loadWallet() {
     $('w-bal').textContent = fmt(data.balance);
 
     $('tx').innerHTML = data.transactions.length === 0 
-        ? '<p style="padding:16px;color:var(--dim)">Нет операций</p>' 
+        ? '<div class="empty-state"><p>Нет операций</p></div>' 
         : data.transactions.map(t =>
-            '<div class="tx"><div><b>' + t.desc + '</b><br><small>' + new Date(t.date).toLocaleString('ru-RU') + '</small></div><span class="' + (t.amount > 0 ? 'tx-plus' : 'tx-minus') + '">' + (t.amount > 0 ? '+' : '') + fmt(t.amount) + '</span></div>'
+            '<div class="tx"><div class="tx-info"><b>' + t.desc + '</b><small>' + new Date(t.date).toLocaleString('ru-RU') + '</small></div><span class="' + (t.amount > 0 ? 'tx-plus' : 'tx-minus') + '">' + (t.amount > 0 ? '+' : '') + fmt(t.amount) + '</span></div>'
         ).join('');
 }
 
@@ -1420,11 +1526,11 @@ async function topUp(amount) {
     user.balance = d.balance;
     updateUI();
     loadWallet();
-    toast('+' + fmt(amount));
+    toast('✅ +' + fmt(amount));
 }
 
 // ═══════════════════════════════════════════════════════════
-// ПУБЛИКАЦИЯ
+// PUBLISH
 // ═══════════════════════════════════════════════════════════
 
 async function publish() {
@@ -1433,7 +1539,10 @@ async function publish() {
     const desc = $('u-desc').value.trim();
     const cat = $('u-cat').value;
     const file = $('u-file').files[0];
-    if (!title || !price || !desc) return toast('Заполни все поля');
+    
+    if (!title) return toast('Введите название');
+    if (!price) return toast('Укажите цену');
+    if (!desc) return toast('Добавьте описание');
 
     const fd = new FormData();
     fd.append('username', user.username);
@@ -1445,7 +1554,7 @@ async function publish() {
 
     const res = await fetch('/api/publish', { method: 'POST', body: fd });
     if (res.ok) {
-        toast('Опубликовано!');
+        toast('🚀 Товар опубликован!');
         $('u-title').value = '';
         $('u-price').value = '';
         $('u-desc').value = '';
@@ -1463,14 +1572,14 @@ app.get('/', (req, res) => res.send(HTML));
 // ЗАПУСК
 // ═══════════════════════════════════════════════════════════
 app.listen(PORT, async () => {
-    console.log('CodeVault started on port ' + PORT);
+    console.log('🚀 CodeVault started on port ' + PORT);
 
     try {
         const webhookUrl = DOMAIN + WEBHOOK_PATH;
         const res = await fetch(TELEGRAM_API + '/setWebhook?url=' + webhookUrl);
         const data = await res.json();
-        console.log('Webhook:', data.ok ? 'OK' : 'FAIL', data.description || '');
+        console.log('📡 Webhook:', data.ok ? 'OK' : 'FAIL', data.description || '');
     } catch (e) {
-        console.log('Webhook error:', e.message);
+        console.log('⚠️ Webhook error:', e.message);
     }
 });
